@@ -5,3 +5,5 @@
 from .glue import GlueDataset, GlueDataTrainingArguments
 from .language_modeling import LineByLineTextDataset, TextDataset, TextDatasetForNextSentencePrediction
 from .squad import SquadDataset, SquadDataTrainingArguments
+
+from .asr import ASRTextDataset, ASRTextDataTrainingArguments, ASRDataset, ASRDataTrainingArguments

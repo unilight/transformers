@@ -4,11 +4,13 @@ from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
+from torch.nn.functional import pad
+
+import numpy as np
 
 from ..tokenization_utils import PreTrainedTokenizer
 from ..tokenization_utils_base import BatchEncoding, PaddingStrategy
 from ..tokenization_utils_fast import PreTrainedTokenizerFast
-
 
 InputDataClass = NewType("InputDataClass", Any)
 
@@ -67,6 +69,61 @@ def default_data_collator(features: List[InputDataClass]) -> Dict[str, torch.Ten
 
     return batch
 
+
+@dataclass
+class DataCollatorForASR:
+    
+    max_text_length: Optional[int] = None
+
+    def __call__(self, features: List[InputDataClass]) -> Dict[str, torch.Tensor]:
+    
+        if not isinstance(features[0], (dict, BatchEncoding)):
+            features = [vars(f) for f in features]
+
+        first = features[0]
+        batch = {}
+
+        # Special handling for labels.
+        # Ensure that tensor is created with the correct type
+        # (it should be automatically the case, but let's make sure of it.)
+        if "label" in first and first["label"] is not None:
+            label = first["label"].item() if isinstance(first["label"], torch.Tensor) else first["label"]
+            dtype = torch.long if isinstance(label, int) else torch.float
+            batch["labels"] = torch.tensor([f["label"] for f in features], dtype=dtype)
+        elif "label_ids" in first and first["label_ids"] is not None:
+            if isinstance(first["label_ids"], torch.Tensor):
+                batch["labels"] = torch.stack([f["label_ids"] for f in features])
+            else:
+                dtype = torch.long if type(first["label_ids"][0]) is int else torch.float
+                batch["labels"] = torch.tensor([f["label_ids"] for f in features], dtype=dtype)
+        
+        # Special handling for MFCCS.
+        if first["mfccs"] is not None:
+            """ 1. Take the last word to the first word. (current frame) """
+            reversed_mfccs = [[f["mfccs"][-1]] + f["mfccs"][:-1] for f in features]
+            """ 2. Add one more empty frame (correspond to [SEP]) """
+            appended_mfccs = [np.pad(mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant") for mfccs in reversed_mfccs]
+            """ 3. Convert to tensor and pad """
+            mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
+            max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in mfccs])
+            max_frame_length = max([mfcc.shape[1] for mfcc in mfccs])
+            frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in mfccs]
+            text_padded_mfccs = [pad(mfcc, (0, 0, 0, 0, 0, max_text_length - mfcc.shape[0])) for mfcc in frame_padded_mfccs]
+            all_mfccs = torch.stack(text_padded_mfccs)
+            batch["inputs_mfccs"] = all_mfccs
+
+        # Handling of all other possible keys.
+        # Again, we will use the first element to figure out which key/values are not None for this model.
+        for k, v in first.items():
+            if k == "mfccs":
+                continue
+            if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
+                if isinstance(v, torch.Tensor):
+                    batch[k] = torch.stack([f[k] for f in features])
+                else:
+                    batch[k] = torch.tensor([f[k] for f in features])
+
+        return batch
 
 @dataclass
 class DataCollatorWithPadding:
@@ -525,3 +582,4 @@ class DataCollatorForNextSentencePrediction:
 
         # The rest of the time (10% of the time) we keep the masked input tokens unchanged
         return inputs, labels
+

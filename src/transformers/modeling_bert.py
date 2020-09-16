@@ -189,7 +189,7 @@ class BertEmbeddings(nn.Module):
         # position_ids (1, len position emb) is contiguous in memory and exported when serialized
         self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
 
-    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None):
+    def forward(self, input_ids=None, token_type_ids=None, position_ids=None, inputs_embeds=None, inputs_mfccs=None):
         if input_ids is not None:
             input_shape = input_ids.size()
         else:
@@ -209,6 +209,8 @@ class BertEmbeddings(nn.Module):
         token_type_embeddings = self.token_type_embeddings(token_type_ids)
 
         embeddings = inputs_embeds + position_embeddings + token_type_embeddings
+        if inputs_mfccs is not None:
+            embeddings = embeddings + inputs_mfccs
         embeddings = self.LayerNorm(embeddings)
         embeddings = self.dropout(embeddings)
         return embeddings
@@ -763,6 +765,7 @@ class BertModel(BertPreTrainedModel):
         position_ids=None,
         head_mask=None,
         inputs_embeds=None,
+        inputs_mfccs=None,
         encoder_hidden_states=None,
         encoder_attention_mask=None,
         output_attentions=None,
@@ -824,7 +827,8 @@ class BertModel(BertPreTrainedModel):
         head_mask = self.get_head_mask(head_mask, self.config.num_hidden_layers)
 
         embedding_output = self.embeddings(
-            input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds
+            input_ids=input_ids, position_ids=position_ids, token_type_ids=token_type_ids, inputs_embeds=inputs_embeds,
+            inputs_mfccs=inputs_mfccs
         )
         encoder_outputs = self.encoder(
             embedding_output,
@@ -1266,6 +1270,120 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         return NextSentencePredictorOutput(
             loss=next_sentence_loss,
             logits=seq_relationship_scores,
+            hidden_states=outputs.hidden_states,
+            attentions=outputs.attentions,
+        )
+
+class MFCCEncoder(torch.nn.Module):
+    """Encoder for MFCCs.
+    """
+
+    def __init__(self, c, odim):
+        super(MFCCEncoder, self).__init__()
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(1, c, 3, 1, bias=False),
+            torch.nn.ReLU(),
+            torch.nn.Conv2d(c, c, 3, 1),
+            torch.nn.ReLU(),
+        )
+        self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
+
+    def forward(self, x):
+        """
+
+        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :return: torch.Tensor of shape (B, text_length, odim)
+
+        """
+
+        # Input: (b, t, f, d)
+        b, t, f, d = x.size()
+        
+        # To do conv2d, we reshape to (b * t, 1, f, d)
+        x = x.view(b * t, 1, f, d)
+        x = self.conv(x) # (b * t, 768, f-4, d-4)
+        
+        # reshape back to (b, t, ...)
+        _, odim, newf, newd = x.size()
+        x = x.view(b, t, odim, -1) # (b, t, odim, f-4 * d-4)
+        
+        x = self.pool(x)
+        x = x.squeeze(-1)
+        return x
+        
+class BertForASR(BertPreTrainedModel):
+    def __init__(self, config):
+        super().__init__(config)
+        self.num_labels = config.num_labels
+
+        if config.use_audio:
+            self.encoder = MFCCEncoder(128, config.hidden_size)
+        self.bert = BertModel(config)
+        self.dropout = nn.Dropout(config.hidden_dropout_prob)
+        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+
+        self.init_weights()
+
+    def forward(
+        self,
+        input_ids=None,
+        attention_mask=None,
+        token_type_ids=None,
+        position_ids=None,
+        head_mask=None,
+        inputs_embeds=None,
+        inputs_mfccs=None,
+        labels=None,
+        output_attentions=None,
+        output_hidden_states=None,
+        return_dict=None,
+    ):
+        r"""
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for computing the sequence classification/regression loss.
+            Indices should be in :obj:`[0, ..., config.num_labels - 1]`.
+            If :obj:`config.num_labels == 1` a regression loss is computed (Mean-Square loss),
+            If :obj:`config.num_labels > 1` a classification loss is computed (Cross-Entropy).
+        """
+        return_dict = return_dict if return_dict is not None else self.config.use_return_dict
+
+        acoustic_embeddings = self.encoder(inputs_mfccs) if self.config.use_audio else None
+
+        outputs = self.bert(
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            inputs_mfccs=acoustic_embeddings,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
+        pooled_output = outputs[1]
+
+        pooled_output = self.dropout(pooled_output)
+        logits = self.classifier(pooled_output)
+
+        loss = None
+        if labels is not None:
+            if self.num_labels == 1:
+                #  We are doing regression
+                loss_fct = MSELoss()
+                loss = loss_fct(logits.view(-1), labels.view(-1))
+            else:
+                loss_fct = CrossEntropyLoss()
+                loss = loss_fct(logits.view(-1, self.num_labels), labels.view(-1))
+
+        if not return_dict:
+            output = (logits,) + outputs[2:]
+            return ((loss,) + output) if loss is not None else output
+
+        return SequenceClassifierOutput(
+            loss=loss,
+            logits=logits,
             hidden_states=outputs.hidden_states,
             attentions=outputs.attentions,
         )

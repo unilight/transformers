@@ -20,6 +20,9 @@ from .processors import (
     xnli_output_modes,
     xnli_processors,
     xnli_tasks_num_labels,
+    asr_convert_examples_to_features,
+    InputASRExample,
+    InputASRFeatures
 )
 
 

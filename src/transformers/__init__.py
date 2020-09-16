@@ -65,6 +65,7 @@ from .data import (
     xnli_output_modes,
     xnli_processors,
     xnli_tasks_num_labels,
+    asr_convert_examples_to_features,
 )
 
 # Files and general utilities
@@ -207,6 +208,7 @@ if is_torch_available():
         DataCollatorForPermutationLanguageModeling,
         DataCollatorWithPadding,
         default_data_collator,
+        DataCollatorForASR,
     )
     from .data.datasets import (
         GlueDataset,
@@ -216,6 +218,10 @@ if is_torch_available():
         SquadDataTrainingArguments,
         TextDataset,
         TextDatasetForNextSentencePrediction,
+        ASRTextDataset,
+        ASRTextDataTrainingArguments,
+        ASRDataset,
+        ASRDataTrainingArguments,
     )
     from .generation_utils import top_k_top_p_filtering
     from .modeling_albert import (
@@ -274,6 +280,7 @@ if is_torch_available():
         BertModel,
         BertPreTrainedModel,
         load_tf_weights_in_bert,
+        BertForASR,
     )
     from .modeling_camembert import (
         CAMEMBERT_PRETRAINED_MODEL_ARCHIVE_LIST,
