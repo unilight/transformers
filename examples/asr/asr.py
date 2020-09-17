@@ -71,6 +71,10 @@ class ModelArguments:
     cache_dir: Optional[str] = field(
         default=None, metadata={"help": "Where do you want to store the pretrained models downloaded from s3"}
     )
+    acoustic_encoder_type: Optional[str] = field(
+        default="conv", metadata={"help": "Acoustic encoder type."}
+    )
+
 
 @dataclass
 class CustomArguments:
@@ -135,6 +139,8 @@ def main():
 
     config.num_labels = config.vocab_size
     config.use_audio = True if data_args.use_audio == "yes" else False
+    config.fusion_place = data_args.fusion_place
+    config.acoustic_encoder_type = model_args.acoustic_encoder_type
 
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=model_args.cache_dir)

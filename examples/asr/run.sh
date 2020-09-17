@@ -24,6 +24,8 @@ accum_grad=8
 freeze_mods=
 use_audio=
 exhaustion=
+fusion_place="first"
+acoustic_encoder_type="conv"
 
 # model related
 model_type=bert
@@ -104,6 +106,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     expdir=exp/${tag}
     
     python asr.py \
+        --acoustic_encoder_type=${acoustic_encoder_type} \
+        --fusion_place=${fusion_place} \
         --exhaustion=${exhaustion} \
         --use_audio=${use_audio} \
         --save_steps=${save_steps} \
@@ -129,8 +133,8 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         expdir=${model_dir}
     fi
 
-    
     python decode.py \
+        --fusion_place=${fusion_place} \
         --do_perplexity=${ppl} \
         --use_audio=${use_audio} \
         --set_type=${set_type} \

@@ -51,7 +51,12 @@ class ASRDataTrainingArguments:
         default=False, metadata={"help": "Overwrite the cached training and evaluation sets"}
     )
     use_audio: Optional[str] = field(
-        default="no", metadata={"help": "Where to use audio or not"}
+        default="no", metadata={"help": "Whether to use audio or not"}
+    )
+    
+    # TODO: this should not be here...
+    fusion_place: Optional[str] = field(
+        default="first", metadata={"help": "Where to use acoustic embedding"}
     )
 
 

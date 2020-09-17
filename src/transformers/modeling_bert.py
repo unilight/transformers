@@ -22,6 +22,8 @@ import warnings
 from dataclasses import dataclass
 from typing import Optional, Tuple
 
+from copy import deepcopy
+
 import torch
 import torch.utils.checkpoint
 from torch import nn
@@ -1274,6 +1276,25 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+#class MFCCTransformerEncoder(BertEncoder):
+class MFCCTransformerEncoder(torch.nn.Module):
+    def __init__(self, idim, num_hidden_layers, config):
+        #super().__init__(config)
+        super(MFCCTransformerEncoder, self).__init__()
+        self.projection = nn.Linear(idim, config.hidden_size)
+        encoder_config = deepcopy(config)
+        encoder_config.num_hidden_layers = num_hidden_layers
+        self.encoder = BertEncoder(encoder_config)
+        # self.layer = nn.ModuleList([BertLayer(config) for _ in range(num_hidden_layers)])
+        self.pool = torch.nn.AdaptiveMaxPool2d((config.hidden_size, 1))
+    
+    def forward(self, x):
+        x = self.projection(x)
+        x = self.encoder(x, return_dict=True)
+        x = self.pool(x.last_hidden_state)
+        x = x.squeeze(-1)
+        return x
+
 class MFCCEncoder(torch.nn.Module):
     """Encoder for MFCCs.
     """
@@ -1316,11 +1337,18 @@ class BertForASR(BertPreTrainedModel):
         super().__init__(config)
         self.num_labels = config.num_labels
 
-        if config.use_audio:
-            self.encoder = MFCCEncoder(128, config.hidden_size)
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        self.classifier = nn.Linear(config.hidden_size, config.num_labels)
+        
+        classifier_idim = config.hidden_size
+        if config.use_audio:
+            if config.acoustic_encoder_type == "conv":
+                self.encoder = MFCCEncoder(128, config.hidden_size)
+            elif config.acoustic_encoder_type == "transformer":
+                self.encoder = MFCCTransformerEncoder(83, 1, config)
+            else:
+                raise ValueError("Unknown fusion_place.")
+        self.classifier = nn.Linear(classifier_idim, config.num_labels)
 
         self.init_weights()
 
@@ -1347,7 +1375,25 @@ class BertForASR(BertPreTrainedModel):
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
-        acoustic_embeddings = self.encoder(inputs_mfccs) if self.config.use_audio else None
+        #print("Inputs mfccs shape", inputs_mfccs.shape)
+        if self.config.use_audio:
+            if self.config.acoustic_encoder_type == "conv":
+                acoustic_embeddings = self.encoder(inputs_mfccs)
+            elif self.config.acoustic_encoder_type == "transformer":
+                # The BertEncoder in HFT does not accept 4-dim input, 
+                # So we do this sentence by sentence
+                acoustic_embeddings = torch.stack(
+                    [self.encoder(mfccs) for mfccs in torch.unbind(inputs_mfccs)]
+                )
+            if self.config.fusion_place == "first":
+                acoustic_embeddings_to_bert = acoustic_embeddings
+            else:
+                acoustic_embeddings_to_bert = None
+        else:
+            acoustic_embeddings_to_bert = None
+
+
+        #print("Acoustic embedding:", acoustic_embeddings_to_bert)
 
         outputs = self.bert(
             input_ids,
@@ -1356,7 +1402,7 @@ class BertForASR(BertPreTrainedModel):
             position_ids=position_ids,
             head_mask=head_mask,
             inputs_embeds=inputs_embeds,
-            inputs_mfccs=acoustic_embeddings,
+            inputs_mfccs=acoustic_embeddings_to_bert,
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
@@ -1365,6 +1411,9 @@ class BertForASR(BertPreTrainedModel):
         pooled_output = outputs[1]
 
         pooled_output = self.dropout(pooled_output)
+        if self.config.use_audio and self.config.fusion_place == "last":
+            #pooled_output = torch.cat([pooled_output, acoustic_embeddings], dim=-1)
+            pooled_output = pooled_output + acoustic_embeddings[:, 0]
         logits = self.classifier(pooled_output)
 
         loss = None
