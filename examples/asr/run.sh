@@ -133,7 +133,10 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         expdir=${model_dir}
     fi
 
+    cp exp/text-only-exhaustive/vocab.txt ${expdir}
+
     python decode.py \
+        --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
         --do_perplexity=${ppl} \
         --use_audio=${use_audio} \
