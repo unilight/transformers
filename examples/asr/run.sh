@@ -1,6 +1,7 @@
 #!/bin/bash
 
 # . ./path.sh || exit 1;
+. ./cmd.sh || exit 1;
 
 pip install -e ../../ || exit 1;
 
@@ -9,6 +10,7 @@ stage=-1
 stop_stage=100
 save_steps=10000
 logging_steps=100
+n_jobs=16      # number of parallel jobs in feature extraction
 
 # data related
 data_dir=data
@@ -82,7 +84,7 @@ if [ ${stage} -le 3 ] && [ ${stop_stage} -ge 3 ]; then
             --alignment_file ${alignment_dir}/${set_type}_word \
             --out ${alignment_dir}/${set_type}
     done
-    
+
     echo "Process MFCCs"
     for set_type in train dev test; do
         echo "Set: ${set_type}"
@@ -148,4 +150,40 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
         --overwrite_cache \
         --data_dir=${data_dir}/original \
         --mfcc_dir=${processed_mfcc_dir}
+fi
+
+if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
+    echo "stage 6: Multiprocess ASR decoding"
+
+    if [ -z ${model_dir} ]; then
+        expdir=exp/${tag}
+    else
+        expdir=${model_dir}
+    fi
+
+    cp exp/text-only-exhaustive/vocab.txt ${expdir}
+
+    # Actual decoding
+    pids=()
+    [ ! -e "${expdir}/${set_type}/log" ] && mkdir -p "${expdir}/${set_type}/log"
+    local/make_subset_data.sh "${data_dir}/original/${set_type}.txt" "${n_jobs}" "${expdir}/${set_type}"
+    echo $(date) "Decoding..." 
+    ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/decoding.JOB.log" \
+        python decode.py \
+            --acoustic_encoder_type=${acoustic_encoder_type} \
+            --fusion_place=${fusion_place} \
+            --do_perplexity=${ppl} \
+            --use_audio=${use_audio} \
+            --set_type=${set_type} \
+            --max_seq_length=${max_seq_length} \
+            --output_dir=${expdir} \
+            --model_type=${model_type} \
+            --model_name_or_path=${expdir} \
+            --overwrite_cache \
+            --scp "${expdir}/${set_type}/JOB.scp" \
+            --mfcc_dir=${processed_mfcc_dir} & pids+=($!)
+    i=0; for pid in "${pids[@]}"; do wait "${pid}" || ((++i)); done
+    [ "${i}" -gt 0 ] && echo "$0: ${i} background jobs are failed." && exit 1;
+    echo $(date) "Successfully finished decoding."
+
 fi

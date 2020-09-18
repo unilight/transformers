@@ -31,11 +31,12 @@ class ASRDataTrainingArguments:
     the command line.
     """
 
-    data_dir: str = field(
-        metadata={"help": "The input data dir containing the text."}
-    )
     mfcc_dir: str = field(
         metadata={"help": "The data dir of the MFCC hdf5 files."}
+    )
+    data_dir: Optional[str] = field(
+        default=None, 
+        metadata={"help": "The input data dir containing the text."}
     )
     max_seq_length: int = field(
         default=128,
@@ -76,6 +77,7 @@ class ASRDataset(Dataset):
         args: ASRDataTrainingArguments,
         use_audio: bool,
         tokenizer: PreTrainedTokenizer,
+        scp: Optional[str] = None,
         limit_length: Optional[int] = None,
         mode: Union[str, Split] = Split.train,
         cache_dir: Optional[str] = None,
@@ -87,6 +89,7 @@ class ASRDataset(Dataset):
                 mode = Split[mode]
             except KeyError:
                 raise KeyError("mode is not a valid split name")
+        """
         # Load data features from cache or dataset file
         cached_features_file = os.path.join(
             cache_dir if cache_dir is not None else args.data_dir,
@@ -96,7 +99,9 @@ class ASRDataset(Dataset):
                 str(args.max_seq_length),
             ),
         )
+        """
         self.use_audio = use_audio
+        self.scp = scp if scp is not None else None
 
         """
         # Make sure only the first process in distributed training processes the dataset,
@@ -134,12 +139,21 @@ class ASRDataset(Dataset):
                 )
         """
         exhaustion = True if args.exhaustion == "yes" else False
-        if mode == Split.dev:
-            examples = self.processor.get_dev_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
-        elif mode == Split.test:
-            examples = self.processor.get_test_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
+        print(self.scp)
+        if self.scp is not None:
+            if mode == Split.dev:
+                examples = self.processor.get_dev_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
+            elif mode == Split.test:
+                examples = self.processor.get_test_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
+            else:
+                examples = self.processor.get_train_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
         else:
-            examples = self.processor.get_train_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
+            if mode == Split.dev:
+                examples = self.processor.get_dev_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
+            elif mode == Split.test:
+                examples = self.processor.get_test_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
+            else:
+                examples = self.processor.get_train_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
         if limit_length is not None:
             examples = examples[:limit_length]
         self.features = asr_convert_examples_to_features(

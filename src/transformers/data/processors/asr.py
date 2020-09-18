@@ -133,14 +133,14 @@ def _asr_convert_examples_to_features(
         max_length = tokenizer.max_len
 
     # processor = ASRTextProcessor()
-    
+
     batch_encoding = tokenizer(
         [example.text_a for example in examples],
         max_length=max_length,
         padding="max_length",
         truncation=True,
     )
-    
+
     labels_id = tokenizer(
         [example.label for example in examples],
         add_special_tokens=False
@@ -166,7 +166,7 @@ class ASRProcessor(DataProcessor):
         with open(file_path, encoding="utf-8") as f:
             return [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
             #return [line for line in f.read().splitlines()[:100] if (len(line) > 0 and not line.isspace())]
-    
+
     def _read_mfcc(self, mfcc_dir):
         """Return a dict: {fileid: processed_mfcc}"""
         return {os.path.splitext(f)[0] : h5py.File(os.path.join(mfcc_dir, f), 'r')["mfccs"][()]
@@ -174,32 +174,42 @@ class ASRProcessor(DataProcessor):
             #for f in sorted(os.listdir(mfcc_dir))[:100]
         }
 
-    def get_train_examples(self, data_dir, mfcc_dir, use_audio, exhaustion):
-        """See base class."""
-        return self._create_examples(
-            self._read_txt(os.path.join(data_dir, "train.txt")),
-            self._read_mfcc(os.path.join(mfcc_dir, "train")) if use_audio else None,
-            "train",
-            exhaustion
-        )
+    def _read_mfcc_from_scp(self, scp, mfcc_dir):
+        """Return a dict: {fileid: processed_mfcc}"""
+        fileids = [line.split(" ")[0] for line in scp]
+        return {f: h5py.File(os.path.join(mfcc_dir, f+".hdf5"), 'r')["mfccs"][()]
+            for f in fileids
+        }
 
-    def get_dev_examples(self, data_dir, mfcc_dir, use_audio, exhaustion):
+    def get_train_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
         """See base class."""
-        return self._create_examples(
-            self._read_txt(os.path.join(data_dir, "dev.txt")),
-            self._read_mfcc(os.path.join(mfcc_dir, "dev")) if use_audio else None,
-            "dev",
-            exhaustion
-        )
+        if scp:
+            scp = self._read_txt(data_dir) # TODO: rename data_dir.
+            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "train")) if use_audio else None
+        else:
+            scp = self._read_txt(os.path.join(data_dir, "train.txt"))
+            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "train")) if use_audio else None
+        return self._create_examples(scp, mfccs, "train", exhaustion)
 
-    def get_test_examples(self, data_dir, mfcc_dir, use_audio, exhaustion):
+    def get_dev_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
         """See base class."""
-        return self._create_examples(
-            self._read_txt(os.path.join(data_dir, "test.txt")),
-            self._read_mfcc(os.path.join(mfcc_dir, "test")) if use_audio else None,
-            "test",
-            exhaustion
-        )
+        if scp:
+            scp = self._read_txt(data_dir) # TODO: rename data_dir.
+            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "dev")) if use_audio else None
+        else:
+            scp = self._read_txt(os.path.join(data_dir, "dev.txt"))
+            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "dev")) if use_audio else None
+        return self._create_examples(scp, mfccs, "dev", exhaustion)
+
+    def get_test_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
+        """See base class."""
+        if scp:
+            scp = self._read_txt(data_dir) # TODO: rename data_dir.
+            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "test")) if use_audio else None
+        else:
+            scp = self._read_txt(os.path.join(data_dir, "test.txt")),
+            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "test")) if use_audio else None
+        return self._create_examples(scp, mfccs, "test", exhaustion)
 
     def _create_examples(self, lines, mfcc_dict, set_type, exhaustion=False):
         """Creates examples for the training, dev and test sets."""

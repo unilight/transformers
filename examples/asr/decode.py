@@ -90,6 +90,7 @@ class DecodeArguments:
     """
     Arguments related to decoding.
     """
+    scp: str = field(default=None, metadata={"help": "Scp path."})
     set_type: str = field(default="dev", metadata={"help": "Whether to run perplexity."})
     do_perplexity: str = field(default="no", metadata={"help": "Whether to run perplexity."})
     beam_size: int = field(default=10, metadata={"help": "Beam size."})
@@ -158,7 +159,7 @@ def main():
     logger.info("*** Building Evaluation dataset ***")
     eval_dataset = (
         ASRDataset(data_args, use_audio=config.use_audio, tokenizer=tokenizer, cache_dir=model_args.cache_dir,
-            mode=decode_args.set_type) # TODO: change this to an arg
+            mode=decode_args.set_type, scp=decode_args.scp ) # TODO: change this to an arg
     )
 
     if decode_args.do_perplexity != "no":
@@ -166,7 +167,7 @@ def main():
         logger.info("*** Calculate perplexity ***")
 
         all_ppl=[]
-        for example in tqdm(eval_dataset):
+        for j, example in tqdm(enumerate(eval_dataset)):
             lls = []
             decode_id=[]
             text_length = np.count_nonzero(example.input_ids)-1
@@ -209,8 +210,9 @@ def main():
                     decode_id.append(max_id)
 
                 lls.append(log_likelihood)
-            #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
-            #print("predicted: ", tokenizer.decode(decode_id).replace(" ", ""))
+            logger.info("{}/{}".format(j, len(eval_dataset)))
+            logger.info("original:  {}".format(tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", "")))
+            logger.info("predicted: {}".format(tokenizer.decode(decode_id).replace(" ", "")))
             ppl = torch.exp(torch.stack(lls).sum() / text_length-1)
             all_ppl.append(ppl)
 
