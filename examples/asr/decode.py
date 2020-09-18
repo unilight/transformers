@@ -104,7 +104,7 @@ def main():
         (ModelArguments, DataTrainingArguments, TrainingArguments, DecodeArguments)
     )
     model_args, data_args, training_args, decode_args = parser.parse_args_into_dataclasses()
-    
+
     if model_args.model_name_or_path is None:
         raise ValueError(
             "Please specify --model_dir."
@@ -150,7 +150,8 @@ def main():
         config=config,
     )
     model.resize_token_embeddings(len(tokenizer))
-    model.cuda()
+    if torch.cuda.is_available():
+        model.cuda()
     model.eval()
 
     # Get datasets
@@ -159,52 +160,42 @@ def main():
         ASRDataset(data_args, use_audio=config.use_audio, tokenizer=tokenizer, cache_dir=model_args.cache_dir,
             mode=decode_args.set_type) # TODO: change this to an arg
     )
-    
+
     if decode_args.do_perplexity != "no":
         # Calculate perplexity
         logger.info("*** Calculate perplexity ***")
-        
+
         all_ppl=[]
         for example in tqdm(eval_dataset):
             lls = []
             decode_id=[]
             text_length = np.count_nonzero(example.input_ids)-1
+            o_input_ids = torch.tensor(example.input_ids).to(device)
+            o_labels = torch.cat([o_input_ids, torch.tensor([example.label]).to(device)])
             if config.use_audio:
-                o_mfccs = example.mfccs
-                #o_mfccs = np.concatenate([example.mfccs[1:text_length], example.mfccs[0][np.newaxis,...]], axis=0)
+                o_mfccs = torch.tensor(example.mfccs, dtype=torch.float).to(device)
                 max_frame, dimension = o_mfccs.shape[1:]
+                zero_mfccs = torch.zeros(1, max_frame, dimension, dtype=torch.float).to(device)
                 if o_mfccs.shape[0] != text_length:
                     #print(o_mfccs.shape[0], text_length)
                     #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
                     #print(example.input_ids)
                     continue
-            
+
             for i in range(text_length):
                 attention_mask = torch.ones(i+2, dtype=torch.long).unsqueeze(0).to(device)
                 token_type_ids = torch.zeros(i+2, dtype=torch.long).unsqueeze(0).to(device)
 
-                input_ids = torch.tensor(
-                    example.input_ids[:i+1] + [example.input_ids[text_length]]
-                ).unsqueeze(0).to(device)
+                input_ids = torch.cat([o_input_ids[:i+1], o_input_ids[text_length].unsqueeze(0)]).unsqueeze(0)
                 if config.use_audio:
                     if i ==0:
-                        mfccs = torch.tensor(
-                            np.concatenate([o_mfccs[i][np.newaxis,...], np.zeros((1, max_frame, dimension))]),
-                            dtype=torch.float
-                        ).unsqueeze(0).to(device)
+                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), zero_mfccs]).unsqueeze(0)
                     else:
-                        mfccs = torch.tensor(
-                            np.concatenate([o_mfccs[i][np.newaxis,...], o_mfccs[:i], np.zeros((1, max_frame, dimension))]),
-                            dtype=torch.float
-                        ).unsqueeze(0).to(device)
+                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i], zero_mfccs]).unsqueeze(0)
                 else:
                     mfccs = None
 
-                if i == text_length-1:
-                    label = example.label
-                else:
-                    label = example.input_ids[i+1]
-                label = torch.tensor([label]).to(device)
+                label = o_labels[i+1]
 
                 with torch.no_grad():
                     outputs = model(input_ids,
@@ -222,13 +213,13 @@ def main():
             #print("predicted: ", tokenizer.decode(decode_id).replace(" ", ""))
             ppl = torch.exp(torch.stack(lls).sum() / text_length-1)
             all_ppl.append(ppl)
-        
+
         logger.info("  %s = %s", "ppl", float(sum(all_ppl) / len(all_ppl)) )
         return
-    
+
     # Decode
     logger.info("*** Decoding start ***")
-    
+
     output_file = os.path.join(training_args.output_dir, "dev_results.txt")
     with open(output_file, "w") as writer:
         for example in tqdm(eval_dataset):
@@ -241,7 +232,7 @@ def main():
             for i in range(0, text_length):
                 attention_mask = torch.ones(i+2, dtype=torch.long).unsqueeze(0).to(device)
                 token_type_ids = torch.zeros(i+2, dtype=torch.long).unsqueeze(0).to(device)
-                
+
                 if i == 0:
                     mfccs = torch.tensor(
                         np.concatenate([o_mfccs[i][np.newaxis,...], np.zeros((1, max_frame, dimension))]),
@@ -288,7 +279,7 @@ def main():
                 #print("Time step", i, ", best hypothesis:", tokenizer.decode(n_best[0][0]).replace(" ", ""))
 
 
-                
+
             result_tuple=[
                 tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""),
                 tokenizer.decode(n_best[0][0]).replace(" ", "")
