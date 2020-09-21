@@ -41,7 +41,7 @@ if __name__ == "__main__":
         logging.basicConfig(level=logging.INFO, format=logfmt)
     else:
         logging.basicConfig(level=logging.WARN, format=logfmt)
-        
+
     # read alignments first
     alignments = {}
     with open(args.alignment_file, "r") as f:
@@ -64,7 +64,7 @@ if __name__ == "__main__":
                 end_idx = start_idx + int(float(duration) / args.frame_shift)
                 mfcc_list.append(mfccs[start_idx:end_idx])
             raw_mfccs_dict[fileid] = mfcc_list
-    
+
     # Process the MFCC list.
     # Each processed MFCC array has shape (text_length, max_frames, feature_dim)}
     processed_mfccs_dict = {}

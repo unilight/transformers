@@ -25,6 +25,7 @@ import h5py
 from itertools import zip_longest
 from kaldiio import ReadHelper
 import numpy as np
+import time
 from tqdm.auto import tqdm, trange
 
 from ...tokenization_utils import PreTrainedTokenizer
@@ -41,19 +42,16 @@ class InputASRExample:
 
     Args:
         guid: Unique id for the example.
-        text_a: string. The untokenized text of the first sequence. For single
+        text: string. The untokenized text of the first sequence. For single
             sequence tasks, only this sequence must be specified.
-        text_b: (Optional) string. The untokenized text of the second sequence.
-            Only must be specified for sequence pair tasks.
         label: (Optional) string. The label of the example. This should be
             specified for train and dev examples, but not for test examples.
     """
 
     guid: str
-    text_a: str
-    text_b: Optional[str] = None
-    label: Optional[str] = None
-    mfccs: Optional[np.ndarray] = None
+    text: str
+    label_pos: int
+    mfcc_loader:str = None
 
     def to_json_string(self):
         """Serializes this instance to a JSON string."""
@@ -80,8 +78,9 @@ class InputASRFeatures:
     input_ids: List[int]
     attention_mask: Optional[List[int]] = None
     token_type_ids: Optional[List[int]] = None
-    label: Optional[Union[int, float]] = None
-    mfccs: Optional[np.ndarray] = None
+    #label: Optional[Union[int, float]] = None
+    label_pos: Optional[int] = None
+    mfcc_loader: Optional[str] = None
 
     def to_json_string(self):
         """Serializes this instance to a JSON string."""
@@ -113,10 +112,6 @@ def asr_convert_examples_to_features(
         a list of task-specific ``InputFeatures`` which can be fed to the model.
 
     """
-    #if is_tf_available() and isinstance(examples, tf.data.Dataset):
-    #    if task is None:
-    #        raise ValueError("When calling glue_convert_examples_to_features from TF, the task parameter is required.")
-    #    return _tf_glue_convert_examples_to_features(examples, tokenizer, max_length=max_length, task=task)
     return _asr_convert_examples_to_features(
         examples, tokenizer, max_length=max_length,
         #task=task, label_list=label_list, output_mode=output_mode
@@ -132,24 +127,21 @@ def _asr_convert_examples_to_features(
     if max_length is None:
         max_length = tokenizer.max_len
 
-    # processor = ASRTextProcessor()
-
+    print("Tokenization start")
+    start = time.time()
     batch_encoding = tokenizer(
-        [example.text_a for example in examples],
+        [example.text for example in examples],
         max_length=max_length,
         padding="max_length",
         truncation=True,
     )
-
-    labels_id = tokenizer(
-        [example.label for example in examples],
-        add_special_tokens=False
-    )["input_ids"]
+    print("Tokenization took {:.1f} s".format(time.time() - start))
 
     features = []
-    for i in range(len(examples)):
+    #for i in range(len(examples)):
+    for i in tqdm(range(len(examples))):
         inputs = {k: batch_encoding[k][i] for k in batch_encoding}
-        feature = InputASRFeatures(**inputs, label=labels_id[i][0], mfccs=examples[i].mfccs)
+        feature = InputASRFeatures(**inputs, label_pos=examples[i].label_pos, mfcc_loader=examples[i].mfcc_loader)
         features.append(feature)
 
     for i, example in enumerate(examples[:5]):
@@ -162,115 +154,48 @@ def _asr_convert_examples_to_features(
 class ASRProcessor(DataProcessor):
     """Processor for an ASR data set."""
 
-    def _read_txt(self, file_path):
+    def _read_scp(self, file_path, debug, debug_lines=100):
         with open(file_path, encoding="utf-8") as f:
-            return [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
-            #return [line for line in f.read().splitlines()[:100] if (len(line) > 0 and not line.isspace())]
+            if debug:
+                return [line for line in f.read().splitlines()[:debug_lines] if (len(line) > 0 and not line.isspace())]
+            else:
+                return [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
-    def _read_mfcc(self, mfcc_dir):
+    def _read_mfcc_loader_from_scp(self, scp, mfcc_dir, debug, debug_lines=100):
         """Return a dict: {fileid: processed_mfcc}"""
-        return {os.path.splitext(f)[0] : h5py.File(os.path.join(mfcc_dir, f), 'r')["mfccs"][()]
-            for f in sorted(os.listdir(mfcc_dir))
-            #for f in sorted(os.listdir(mfcc_dir))[:100]
-        }
-
-    def _read_mfcc_from_scp(self, scp, mfcc_dir):
-        """Return a dict: {fileid: processed_mfcc}"""
-        fileids = [line.split(" ")[0] for line in scp]
-        return {f: h5py.File(os.path.join(mfcc_dir, f+".hdf5"), 'r')["mfccs"][()]
+        if debug:
+            fileids = [line.split(" ")[0] for line in scp][:debug_lines]
+        else:
+            fileids = [line.split(" ")[0] for line in scp]
+        # To avoid disk access, create loader only for the first time
+        #return {f: h5py.File(os.path.join(mfcc_dir, f+".hdf5"), 'r')["mfccs"][()]
+        #return {f: h5py.File(os.path.join(mfcc_dir, f+".hdf5"), 'r')
+        return {f: os.path.join(mfcc_dir, f+".hdf5")
             for f in fileids
         }
 
-    def get_train_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
-        """See base class."""
-        if scp:
-            scp = self._read_txt(data_dir) # TODO: rename data_dir.
-            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "train")) if use_audio else None
+    def get_examples(self, mode, data_source, mfcc_dir, use_audio, exhaustion, use_scp=False, debug=False):
+        if use_scp:
+            scp = self._read_scp(data_source, debug)
         else:
-            scp = self._read_txt(os.path.join(data_dir, "train.txt"))
-            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "train")) if use_audio else None
-        return self._create_examples(scp, mfccs, "train", exhaustion)
+            scp = self._read_scp(os.path.join(data_source, mode.value + ".txt"), debug)
+        mfcc_loaders = self._read_mfcc_loader_from_scp(scp, os.path.join(mfcc_dir, mode.value), debug) if use_audio else None
+        return self._create_examples(scp, mfcc_loaders, mode, exhaustion=exhaustion)
 
-    def get_dev_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
-        """See base class."""
-        if scp:
-            scp = self._read_txt(data_dir) # TODO: rename data_dir.
-            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "dev")) if use_audio else None
-        else:
-            scp = self._read_txt(os.path.join(data_dir, "dev.txt"))
-            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "dev")) if use_audio else None
-        return self._create_examples(scp, mfccs, "dev", exhaustion)
-
-    def get_test_examples(self, data_dir, mfcc_dir, use_audio, exhaustion, scp=False):
-        """See base class."""
-        if scp:
-            scp = self._read_txt(data_dir) # TODO: rename data_dir.
-            mfccs = self._read_mfcc_from_scp(scp, os.path.join(mfcc_dir, "test")) if use_audio else None
-        else:
-            scp = self._read_txt(os.path.join(data_dir, "test.txt")),
-            mfccs = self._read_mfcc(os.path.join(mfcc_dir, "test")) if use_audio else None
-        return self._create_examples(scp, mfccs, "test", exhaustion)
-
-    def _create_examples(self, lines, mfcc_dict, set_type, exhaustion=False):
+    def _create_examples(self, lines, mfcc_loaders, set_type, exhaustion=False):
         """Creates examples for the training, dev and test sets."""
-        """mfcc_dict: {key: [mfccs for token 1, mfccs for token 2, ...]}"""
         examples = []
         #for (i, line) in enumerate(lines):
         for (i, line) in tqdm(enumerate(lines)):
             fileid, words = line.split(" ")[:2]
+            mfcc_loader = mfcc_loaders[fileid] if mfcc_loaders is not None else None
             if exhaustion:
                 for j in range(len(words)):
                     guid = "%s-%s-%s" % (set_type, i, j)
-                    text_a = words[:j]
-                    label = words[j]
-                    mfccs = mfcc_dict[fileid][:j+1] if mfcc_dict is not None else None
-                    examples.append(InputASRExample(
-                        guid=guid, text_a=text_a, text_b=None,
-                        label=label, mfccs=mfccs
-                        )
-                    )
+                    text = words[:j+1]
+                    examples.append(InputASRExample(guid=guid, text=text, label_pos=j+1, mfcc_loader=mfcc_loader))
             else:
                 guid = "%s-%s" % (set_type, i)
-                text_a = words[:-1]
-                label = words[-1]
-                mfccs = mfcc_dict[fileid] if mfcc_dict is not None else None
-                examples.append(InputASRExample(
-                    guid=guid, text_a=text_a, text_b=None,
-                    label=label, mfccs=mfccs
-                    )
-                )
-        return examples
-
-class ASRTextProcessor(DataProcessor):
-    """Processor for an ASR text data set."""
-
-    def _read_txt(self, file_path):
-        with open(file_path, encoding="utf-8") as f:
-            return [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
-
-    def get_train_examples(self, data_dir):
-        """See base class."""
-        #return self._create_examples(self._read_tsv(os.path.join(data_dir, "train.tsv")), "train")
-        return self._create_examples(self._read_txt(os.path.join(data_dir, "train.txt")), "train")
-
-    def get_dev_examples(self, data_dir):
-        """See base class."""
-        return self._create_examples(self._read_txt(os.path.join(data_dir, "dev.txt")), "dev")
-
-    def get_test_examples(self, data_dir):
-        """See base class."""
-        return self._create_examples(self._read_txt(os.path.join(data_dir, "test.txt")), "test")
-
-    def get_labels(self):
-        """See base class."""
-        return ["0", "1"]
-
-    def _create_examples(self, lines, set_type):
-        """Creates examples for the training, dev and test sets."""
-        examples = []
-        for (i, line) in enumerate(lines):
-            guid = "%s-%s" % (set_type, i)
-            text_a = line[:-1]
-            label = line[-1]
-            examples.append(InputExample(guid=guid, text_a=text_a, text_b=None, label=label))
+                text = words
+                examples.append(InputASRExample(guid=guid, text=text, label_pos=len(words), mfcc_loader=mfcc_loader))
         return examples

@@ -10,11 +10,9 @@ from torch.utils.data.dataset import Dataset
 from filelock import FileLock
 
 from ...tokenization_bart import BartTokenizer, BartTokenizerFast
-#from ...tokenization_roberta import RobertaTokenizer, RobertaTokenizerFast
 from ...tokenization_utils import PreTrainedTokenizer
-#from ...tokenization_xlm_roberta import XLMRobertaTokenizer
 from ...utils import logging
-from ..processors.asr import asr_convert_examples_to_features, ASRTextProcessor, ASRProcessor, InputASRFeatures
+from ..processors.asr import asr_convert_examples_to_features, ASRProcessor, InputASRFeatures
 from ..processors.utils import InputFeatures
 
 
@@ -35,8 +33,12 @@ class ASRDataTrainingArguments:
         metadata={"help": "The data dir of the MFCC hdf5 files."}
     )
     data_dir: Optional[str] = field(
-        default=None, 
+        default=None,
         metadata={"help": "The input data dir containing the text."}
+    )
+    scp: Optional[str] = field(
+        default=None,
+        metadata={"help": "The scp containing the text."}
     )
     max_seq_length: int = field(
         default=128,
@@ -54,7 +56,7 @@ class ASRDataTrainingArguments:
     use_audio: Optional[str] = field(
         default="no", metadata={"help": "Whether to use audio or not"}
     )
-    
+
     # TODO: this should not be here...
     fusion_place: Optional[str] = field(
         default="first", metadata={"help": "Where to use acoustic embedding"}
@@ -77,7 +79,7 @@ class ASRDataset(Dataset):
         args: ASRDataTrainingArguments,
         use_audio: bool,
         tokenizer: PreTrainedTokenizer,
-        scp: Optional[str] = None,
+        debug: Optional[bool] = False,
         limit_length: Optional[int] = None,
         mode: Union[str, Split] = Split.train,
         cache_dir: Optional[str] = None,
@@ -89,73 +91,34 @@ class ASRDataset(Dataset):
                 mode = Split[mode]
             except KeyError:
                 raise KeyError("mode is not a valid split name")
-        """
-        # Load data features from cache or dataset file
-        cached_features_file = os.path.join(
-            cache_dir if cache_dir is not None else args.data_dir,
-            "cached_{}_{}_{}".format(
-                mode.value,
-                tokenizer.__class__.__name__,
-                str(args.max_seq_length),
-            ),
-        )
-        """
         self.use_audio = use_audio
-        self.scp = scp if scp is not None else None
 
-        """
-        # Make sure only the first process in distributed training processes the dataset,
-        # and the others will use the cache.
-        lock_path = cached_features_file + ".lock"
-        with FileLock(lock_path):
-
-            if os.path.exists(cached_features_file) and not args.overwrite_cache:
-                start = time.time()
-                self.features = torch.load(cached_features_file)
-                logger.info(
-                    f"Loading features from cached file {cached_features_file} [took %.3f s]", time.time() - start
-                )
-            else:
-                logger.info(f"Creating features from dataset file at {args.data_dir}")
-
-                if mode == Split.dev:
-                    examples = self.processor.get_dev_examples(args.data_dir, args.mfcc_dir)
-                elif mode == Split.test:
-                    examples = self.processor.get_test_examples(args.data_dir, args.mfcc_dir)
-                else:
-                    examples = self.processor.get_train_examples(args.data_dir, args.mfcc_dir)
-                if limit_length is not None:
-                    examples = examples[:limit_length]
-                self.features = asr_convert_examples_to_features(
-                    examples,
-                    tokenizer,
-                    max_length=args.max_seq_length,
-                )
-                start = time.time()
-                torch.save(self.features, cached_features_file)
-                # ^ This seems to take a lot of time so I want to investigate why and how we can improve.
-                logger.info(
-                    "Saving features into cached file %s [took %.3f s]", cached_features_file, time.time() - start
-                )
-        """
         exhaustion = True if args.exhaustion == "yes" else False
-        print(self.scp)
-        if self.scp is not None:
-            if mode == Split.dev:
-                examples = self.processor.get_dev_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
-            elif mode == Split.test:
-                examples = self.processor.get_test_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
-            else:
-                examples = self.processor.get_train_examples(self.scp, args.mfcc_dir, self.use_audio, exhaustion, scp=True)
-        else:
-            if mode == Split.dev:
-                examples = self.processor.get_dev_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
-            elif mode == Split.test:
-                examples = self.processor.get_test_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
-            else:
-                examples = self.processor.get_train_examples(args.data_dir, args.mfcc_dir, self.use_audio, exhaustion)
+
+        # Decide to use data_dir or scp as data source
+        if (args.data_dir is not None and args.scp is not None) \
+            or (args.data_dir is None and args.scp is None):
+            raise KeyError("Either data_dir or scp needs to be specified.")
+        if args.data_dir is not None:
+            data_source = args.data_dir
+            use_scp = False
+        elif args.scp is not None:
+            data_source = args.scp
+            use_scp = True
+
+        examples = self.processor.get_examples(
+            mode,
+            data_source,
+            args.mfcc_dir,
+            self.use_audio,
+            exhaustion,
+            use_scp=use_scp,
+            debug=debug
+        )
+
         if limit_length is not None:
             examples = examples[:limit_length]
+
         self.features = asr_convert_examples_to_features(
             examples,
             tokenizer,
@@ -167,9 +130,6 @@ class ASRDataset(Dataset):
 
     def __getitem__(self, i) -> InputFeatures:
         return self.features[i]
-
-    def get_labels(self):
-        return self.label_list
 
 
 @dataclass

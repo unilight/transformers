@@ -6,6 +6,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.functional import pad
 
+import h5py
 import numpy as np
 
 from ..tokenization_utils import PreTrainedTokenizer
@@ -72,11 +73,11 @@ def default_data_collator(features: List[InputDataClass]) -> Dict[str, torch.Ten
 
 @dataclass
 class DataCollatorForASR:
-    
+
     max_text_length: Optional[int] = None
 
     def __call__(self, features: List[InputDataClass]) -> Dict[str, torch.Tensor]:
-    
+
         if not isinstance(features[0], (dict, BatchEncoding)):
             features = [vars(f) for f in features]
 
@@ -84,44 +85,62 @@ class DataCollatorForASR:
         batch = {}
 
         # Special handling for labels.
-        # Ensure that tensor is created with the correct type
-        # (it should be automatically the case, but let's make sure of it.)
-        if "label" in first and first["label"] is not None:
-            label = first["label"].item() if isinstance(first["label"], torch.Tensor) else first["label"]
-            dtype = torch.long if isinstance(label, int) else torch.float
-            batch["labels"] = torch.tensor([f["label"] for f in features], dtype=dtype)
-        elif "label_ids" in first and first["label_ids"] is not None:
-            if isinstance(first["label_ids"], torch.Tensor):
-                batch["labels"] = torch.stack([f["label_ids"] for f in features])
-            else:
-                dtype = torch.long if type(first["label_ids"][0]) is int else torch.float
-                batch["labels"] = torch.tensor([f["label_ids"] for f in features], dtype=dtype)
-        
+        batch["labels"] = torch.tensor([f["input_ids"][f["label_pos"]] for f in features], dtype=torch.long)
+
+        # Special handling for input_ids and attention_masks
+        processed_input_ids = []
+        processed_attention_mask = []
+        for f in features:
+            o_input_ids = f["input_ids"]
+            o_attention_mask = f["attention_mask"]
+            """ Take out label and [SEP] """
+            o_input_ids[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+            o_attention_mask[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+            """ Append to list """
+            processed_input_ids.append(o_input_ids)
+            processed_attention_mask.append(o_attention_mask)
+        """ Convert to tensor """
+        batch["input_ids"] = torch.tensor(processed_input_ids)
+        batch["attention_mask"] = torch.tensor(processed_attention_mask)
+
+        # token_type_ids doesn't need processing
+        batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
+
         # Special handling for MFCCS.
-        if first["mfccs"] is not None:
+        if first["mfcc_loader"] is not None:
+            """ 0. Load the original mfcc"""
+            o_mfccs = []
+            for f in features:
+                with h5py.File(f["mfcc_loader"], 'r') as loader:
+                    o_mfccs.append(loader["mfccs"][()][:f["label_pos"]])
             """ 1. Take the last word to the first word. (current frame) """
-            reversed_mfccs = [[f["mfccs"][-1]] + f["mfccs"][:-1] for f in features]
-            """ 2. Add one more empty frame (correspond to [SEP]) """
-            appended_mfccs = [np.pad(mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant") for mfccs in reversed_mfccs]
+            reversed_mfccs = [np.concatenate([mfccs[-1][np.newaxis,...], mfccs[:-1]]) for mfccs in o_mfccs]
+            # """ 2. Add one more empty frame (correspond to [SEP]) """
+            # appended_mfccs = [np.pad(mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant") for mfccs in reversed_mfccs]
             """ 3. Convert to tensor and pad """
-            mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
-            max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in mfccs])
-            max_frame_length = max([mfcc.shape[1] for mfcc in mfccs])
-            frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in mfccs]
+            #mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
+            tensor_mfccs = [torch.tensor(mfccs) for mfccs in reversed_mfccs]
+            max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in tensor_mfccs])
+            max_frame_length = max([mfcc.shape[1] for mfcc in tensor_mfccs])
+            frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in tensor_mfccs]
             text_padded_mfccs = [pad(mfcc, (0, 0, 0, 0, 0, max_text_length - mfcc.shape[0])) for mfcc in frame_padded_mfccs]
             all_mfccs = torch.stack(text_padded_mfccs)
             batch["inputs_mfccs"] = all_mfccs
 
         # Handling of all other possible keys.
         # Again, we will use the first element to figure out which key/values are not None for this model.
-        for k, v in first.items():
-            if k == "mfccs":
-                continue
-            if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
-                if isinstance(v, torch.Tensor):
-                    batch[k] = torch.stack([f[k] for f in features])
-                else:
-                    batch[k] = torch.tensor([f[k] for f in features])
+        #for k, v in first.items():
+        #    if k in ["mfcc_loader", "input_ids", "attention_mask", "token_type_ids", "label_pos"]:
+        #        continue
+        #    if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
+        #        if isinstance(v, torch.Tensor):
+        #            batch[k] = torch.stack([f[k] for f in features])
+        #        else:
+        #            batch[k] = torch.tensor([f[k] for f in features])
+
+        #for k in batch:
+        #    print(k, batch[k][0])
+        #exit()
 
         return batch
 

@@ -67,7 +67,7 @@ if [ ${stage} -le 2 ] && [ ${stop_stage} -ge 2 ]; then
         --output_dir=${output_dir} \
         --model_dir=${model_dir} \
         --dev_data_file="${data_dir}/cleaned/test.txt"
-    
+
     python perplexity.py \
         --output_dir=${output_dir} \
         --model_dir=${model_dir} \
@@ -106,7 +106,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     echo "stage 4: Train ASR model"
 
     expdir=exp/${tag}
-    
+
     python asr.py \
         --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
@@ -167,7 +167,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     pids=()
     [ ! -e "${expdir}/${set_type}/log" ] && mkdir -p "${expdir}/${set_type}/log"
     local/make_subset_data.sh "${data_dir}/original/${set_type}.txt" "${n_jobs}" "${expdir}/${set_type}"
-    echo $(date) "Decoding..." 
+    echo $(date) "Decoding..."
     ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/decoding.JOB.log" \
         python decode.py \
             --acoustic_encoder_type=${acoustic_encoder_type} \
