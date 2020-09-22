@@ -11,6 +11,7 @@ stop_stage=100
 save_steps=10000
 logging_steps=100
 n_jobs=16      # number of parallel jobs in feature extraction
+debug=no
 
 # data related
 data_dir=data
@@ -20,7 +21,7 @@ mfcc_dir=data/mfcc
 processed_mfcc_dir=data/processed_mfcc
 
 # training related
-max_seq_length=45
+max_seq_length=46
 bs=1
 accum_grad=8
 freeze_mods=
@@ -118,7 +119,8 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --per_device_train_batch_size=${bs} \
         --gradient_accumulation_steps=${accum_grad} \
         --freeze_mods=${freeze_mods} \
-        --output_dir=${expdir} \
+        --debugging=${debug} \
+        --output_dir=${expdir} --overwrite_output_dir \
         --model_type=${model_type} \
         --model_name_or_path=${model} \
         --do_train --overwrite_cache \

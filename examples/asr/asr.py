@@ -84,6 +84,9 @@ class CustomArguments:
     freeze_mods: Optional[str] = field(
         default=None, metadata={"help": "List of modules to freeze (not to train), separated by a comma."}
     )
+    debugging: Optional[str] = field(
+        default=False, metadata={"help": "Debug flag."}
+    )
 
 def main():
     # See all possible arguments in src/transformers/training_args.py
@@ -92,6 +95,11 @@ def main():
 
     parser = HfArgumentParser((ModelArguments, DataTrainingArguments, TrainingArguments, CustomArguments))
     model_args, data_args, training_args, custom_args = parser.parse_args_into_dataclasses()
+
+    if custom_args.debugging == "yes":
+        custom_args.debug = True
+    else:
+        custom_args.debug = False
 
     if (
         os.path.exists(training_args.output_dir)
@@ -181,7 +189,7 @@ def main():
 
     logger.info("*** Building training dataset ***")
     train_dataset = (
-        ASRDataset(data_args, use_audio=config.use_audio, tokenizer=tokenizer, cache_dir=model_args.cache_dir)
+        ASRDataset(data_args, use_audio=config.use_audio, tokenizer=tokenizer, cache_dir=model_args.cache_dir, debug=custom_args.debug)
         if training_args.do_train else None
     )
     data_collator = DataCollatorForASR(max_text_length = data_args.max_seq_length)
