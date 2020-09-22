@@ -24,6 +24,7 @@ processed_mfcc_dir=data/processed_mfcc
 max_seq_length=46
 bs=1
 accum_grad=8
+lr=5e-5
 freeze_mods=
 use_audio=
 exhaustion=
@@ -117,6 +118,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --logging_steps=${logging_steps} \
         --max_seq_length=${max_seq_length} \
         --per_device_train_batch_size=${bs} \
+        --learning_rate=${lr} \
         --gradient_accumulation_steps=${accum_grad} \
         --freeze_mods=${freeze_mods} \
         --debugging=${debug} \

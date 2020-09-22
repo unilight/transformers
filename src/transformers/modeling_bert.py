@@ -1276,6 +1276,20 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
             attentions=outputs.attentions,
         )
 
+class MFCCAvgEncoder(torch.nn.Module):
+    def __init__(self, idim, num_hidden_layers):
+        super(MFCCAvgEncoder, self).__init__()
+        self.projection = nn.Linear(idim, config.hidden_size)
+
+    def forward(self, x):
+        """
+        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :return: torch.Tensor of shape (B, text_length, odim)
+        """
+        x = torch.mean(x, 2)
+        x = self.projection(x)
+        return x
+
 #class MFCCTransformerEncoder(BertEncoder):
 class MFCCTransformerEncoder(torch.nn.Module):
     def __init__(self, idim, num_hidden_layers, config):
@@ -1287,7 +1301,7 @@ class MFCCTransformerEncoder(torch.nn.Module):
         self.encoder = BertEncoder(encoder_config)
         # self.layer = nn.ModuleList([BertLayer(config) for _ in range(num_hidden_layers)])
         self.pool = torch.nn.AdaptiveMaxPool2d((config.hidden_size, 1))
-    
+
     def forward(self, x):
         x = self.projection(x)
         x = self.encoder(x, return_dict=True)
@@ -1311,27 +1325,25 @@ class MFCCEncoder(torch.nn.Module):
 
     def forward(self, x):
         """
-
         :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
         :return: torch.Tensor of shape (B, text_length, odim)
-
         """
 
         # Input: (b, t, f, d)
         b, t, f, d = x.size()
-        
+
         # To do conv2d, we reshape to (b * t, 1, f, d)
         x = x.view(b * t, 1, f, d)
         x = self.conv(x) # (b * t, 768, f-4, d-4)
-        
+
         # reshape back to (b, t, ...)
         _, odim, newf, newd = x.size()
         x = x.view(b, t, odim, -1) # (b, t, odim, f-4 * d-4)
-        
+
         x = self.pool(x)
         x = x.squeeze(-1)
         return x
-        
+
 class BertForASR(BertPreTrainedModel):
     def __init__(self, config):
         super().__init__(config)
@@ -1339,15 +1351,17 @@ class BertForASR(BertPreTrainedModel):
 
         self.bert = BertModel(config)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
-        
+
         classifier_idim = config.hidden_size
         if config.use_audio:
             if config.acoustic_encoder_type == "conv":
                 self.encoder = MFCCEncoder(128, config.hidden_size)
             elif config.acoustic_encoder_type == "transformer":
                 self.encoder = MFCCTransformerEncoder(83, 1, config)
+            elif config.acoustic_encoder_type == "avg":
+                self.encoder = MFCCAvgEncoder()
             else:
-                raise ValueError("Unknown fusion_place.")
+                raise ValueError("Unknown acoustic encoder type.")
         self.classifier = nn.Linear(classifier_idim, config.num_labels)
 
         self.init_weights()
@@ -1385,6 +1399,11 @@ class BertForASR(BertPreTrainedModel):
                 acoustic_embeddings = torch.stack(
                     [self.encoder(mfccs) for mfccs in torch.unbind(inputs_mfccs)]
                 )
+            elif self.config.acoustic_encoder_type == "avg":
+                acoustic_embeddings = self.encoder(inputs_mfccs)
+            else:
+                raise ValueError("unknown acoustic_encoder_type")
+
             if self.config.fusion_place == "first":
                 acoustic_embeddings_to_bert = acoustic_embeddings
             else:
@@ -1412,7 +1431,6 @@ class BertForASR(BertPreTrainedModel):
 
         pooled_output = self.dropout(pooled_output)
         if self.config.use_audio and self.config.fusion_place == "last":
-            #pooled_output = torch.cat([pooled_output, acoustic_embeddings], dim=-1)
             pooled_output = pooled_output + acoustic_embeddings[:, 0]
         logits = self.classifier(pooled_output)
 
