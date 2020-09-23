@@ -1277,9 +1277,9 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         )
 
 class MFCCAvgEncoder(torch.nn.Module):
-    def __init__(self, idim, num_hidden_layers):
+    def __init__(self, idim, odim):
         super(MFCCAvgEncoder, self).__init__()
-        self.projection = nn.Linear(idim, config.hidden_size)
+        self.projection = nn.Linear(idim, odim)
 
     def forward(self, x):
         """
@@ -1317,11 +1317,14 @@ class MFCCEncoder(torch.nn.Module):
         super(MFCCEncoder, self).__init__()
         self.conv = torch.nn.Sequential(
             torch.nn.Conv2d(1, c, 3, 1, bias=False),
-            torch.nn.ReLU(),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
             torch.nn.Conv2d(c, c, 3, 1),
-            torch.nn.ReLU(),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
         )
-        self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
+        #self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
+        self.pool = torch.nn.AdaptiveAvgPool2d((odim, 1))
 
     def forward(self, x):
         """
@@ -1359,7 +1362,7 @@ class BertForASR(BertPreTrainedModel):
             elif config.acoustic_encoder_type == "transformer":
                 self.encoder = MFCCTransformerEncoder(83, 1, config)
             elif config.acoustic_encoder_type == "avg":
-                self.encoder = MFCCAvgEncoder()
+                self.encoder = MFCCAvgEncoder(83, config.hidden_size)
             else:
                 raise ValueError("Unknown acoustic encoder type.")
         self.classifier = nn.Linear(classifier_idim, config.num_labels)

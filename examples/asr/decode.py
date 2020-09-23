@@ -24,6 +24,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Optional
 
+import h5py
 import numpy as np
 from scipy.special import softmax
 from tqdm.auto import tqdm, trange
@@ -90,7 +91,6 @@ class DecodeArguments:
     """
     Arguments related to decoding.
     """
-    scp: str = field(default=None, metadata={"help": "Scp path."})
     set_type: str = field(default="dev", metadata={"help": "Whether to run perplexity."})
     do_perplexity: str = field(default="no", metadata={"help": "Whether to run perplexity."})
     beam_size: int = field(default=10, metadata={"help": "Beam size."})
@@ -159,24 +159,23 @@ def main():
     logger.info("*** Building Evaluation dataset ***")
     eval_dataset = (
         ASRDataset(data_args, use_audio=config.use_audio, tokenizer=tokenizer, cache_dir=model_args.cache_dir,
-            mode=decode_args.set_type, scp=decode_args.scp ) # TODO: change this to an arg
+            mode=decode_args.set_type) # TODO: change this to an arg
     )
 
+    # Calculate perplexity
     if decode_args.do_perplexity != "no":
-        # Calculate perplexity
         logger.info("*** Calculate perplexity ***")
 
         all_ppl=[]
         for j, example in tqdm(enumerate(eval_dataset)):
             lls = []
             decode_id=[]
-            text_length = np.count_nonzero(example.input_ids)-1
+            text_length = example.label_pos
             o_input_ids = torch.tensor(example.input_ids).to(device)
-            o_labels = torch.cat([o_input_ids, torch.tensor([example.label]).to(device)])
             if config.use_audio:
-                o_mfccs = torch.tensor(example.mfccs, dtype=torch.float).to(device)
+                with h5py.File(example.mfcc_loader, 'r') as loader:
+                    o_mfccs = torch.tensor(loader["mfccs"][()]).to(device)
                 max_frame, dimension = o_mfccs.shape[1:]
-                zero_mfccs = torch.zeros(1, max_frame, dimension, dtype=torch.float).to(device)
                 if o_mfccs.shape[0] != text_length:
                     #print(o_mfccs.shape[0], text_length)
                     #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
@@ -184,19 +183,23 @@ def main():
                     continue
 
             for i in range(text_length):
-                attention_mask = torch.ones(i+2, dtype=torch.long).unsqueeze(0).to(device)
-                token_type_ids = torch.zeros(i+2, dtype=torch.long).unsqueeze(0).to(device)
+                attention_mask = torch.ones(i+1, dtype=torch.long).unsqueeze(0).to(device)
+                token_type_ids = torch.zeros(i+1, dtype=torch.long).unsqueeze(0).to(device)
 
-                input_ids = torch.cat([o_input_ids[:i+1], o_input_ids[text_length].unsqueeze(0)]).unsqueeze(0)
+                input_ids = o_input_ids[:i+1].unsqueeze(0)
                 if config.use_audio:
-                    if i ==0:
-                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), zero_mfccs]).unsqueeze(0)
+                    if i == 0:
+                        mfccs = o_mfccs[i].unsqueeze(0).unsqueeze(0)
                     else:
-                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i], zero_mfccs]).unsqueeze(0)
+                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i]]).unsqueeze(0)
                 else:
                     mfccs = None
 
-                label = o_labels[i+1]
+                label = o_input_ids[i+1]
+
+                #print(" input_ids shape", input_ids.shape)
+                #print(" mfccs shape", mfccs.shape)
+                #print(" label shape", label.shape)
 
                 with torch.no_grad():
                     outputs = model(input_ids,
@@ -211,7 +214,7 @@ def main():
 
                 lls.append(log_likelihood)
             logger.info("{}/{}".format(j, len(eval_dataset)))
-            logger.info("original:  {}".format(tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", "")))
+            logger.info("original:  {}".format(tokenizer.decode(example.input_ids[1:text_length+1]).replace(" ", "")))
             logger.info("predicted: {}".format(tokenizer.decode(decode_id).replace(" ", "")))
             ppl = torch.exp(torch.stack(lls).sum() / text_length-1)
             all_ppl.append(ppl)
@@ -222,27 +225,30 @@ def main():
     # Decode
     logger.info("*** Decoding start ***")
 
-    output_file = os.path.join(training_args.output_dir, "dev_results.txt")
+    output_file = os.path.join(training_args.output_dir, "dev_asr_results.txt")
     with open(output_file, "w") as writer:
-        for example in tqdm(eval_dataset):
+        for j, example in tqdm(enumerate(eval_dataset)):
             n_best = []
-
-            text_length = example.mfccs.shape[0]-1
-            o_mfccs = np.concatenate([example.mfccs[1:text_length], example.mfccs[0][np.newaxis,...]], axis=0)
+            
+            text_length = example.label_pos
+            o_input_ids = example.input_ids
+            with h5py.File(example.mfcc_loader, 'r') as loader:
+                o_mfccs = torch.tensor(loader["mfccs"][()]).to(device)
             max_frame, dimension = o_mfccs.shape[1:]
+            if o_mfccs.shape[0] != text_length:
+                #print(o_mfccs.shape[0], text_length)
+                #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
+                #print(example.input_ids)
+                continue
 
+            # NOTE: input_ids needs `to(device)` at every time step
             for i in range(0, text_length):
-                attention_mask = torch.ones(i+2, dtype=torch.long).unsqueeze(0).to(device)
-                token_type_ids = torch.zeros(i+2, dtype=torch.long).unsqueeze(0).to(device)
+                attention_mask = torch.ones(i+1, dtype=torch.long).unsqueeze(0).to(device)
+                token_type_ids = torch.zeros(i+1, dtype=torch.long).unsqueeze(0).to(device)
 
                 if i == 0:
-                    mfccs = torch.tensor(
-                        np.concatenate([o_mfccs[i][np.newaxis,...], np.zeros((1, max_frame, dimension))]),
-                        dtype=torch.float
-                    ).unsqueeze(0).to(device)
-                    input_ids = torch.tensor(
-                        [example.input_ids[0]] + [example.input_ids[text_length]],
-                    ).unsqueeze(0).to(device)
+                    mfccs = o_mfccs[i].unsqueeze(0).unsqueeze(0)
+                    input_ids = torch.tensor(o_input_ids[:i+1]).unsqueeze(0).to(device)
                     with torch.no_grad():
                         outputs = model(input_ids,
                             attention_mask = attention_mask,
@@ -255,14 +261,11 @@ def main():
                             n_best.append(([best_id], log_likelihood[best_id]))
 
                 else:
-                    mfccs = torch.tensor(
-                        np.concatenate([o_mfccs[i][np.newaxis,...], o_mfccs[:i], np.zeros((1, max_frame, dimension))]),
-                        dtype=torch.float
-                    ).unsqueeze(0).to(device)
+                    mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i]]).unsqueeze(0)
                     new_n_best = []
                     for b in range(decode_args.beam_size):
                         input_ids = torch.tensor(
-                            [example.input_ids[0]] + n_best[b][0] + [example.input_ids[text_length]]
+                            [o_input_ids[0]] + n_best[b][0]
                         ).unsqueeze(0).to(device)
                         with torch.no_grad():
                             outputs = model(input_ids,
@@ -283,11 +286,12 @@ def main():
 
 
             result_tuple=[
-                tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""),
+                tokenizer.decode(example.input_ids[1:text_length+1]).replace(" ", ""),
                 tokenizer.decode(n_best[0][0]).replace(" ", "")
             ]
-            #print("Original:   ", result_tuple[0])
-            #print("Prediction: ", result_tuple[1])
+            logger.info("{}/{}".format(j, len(eval_dataset)))
+            logging.info("Original:   {}".format(result_tuple[0]))
+            logging.info("Prediction: {}".format(result_tuple[1]))
             writer.write("Original:   {}\n".format(result_tuple[0]))
             writer.write("Predition:  {}\n".format(result_tuple[1]))
             writer.flush()

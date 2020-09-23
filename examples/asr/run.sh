@@ -10,7 +10,7 @@ stage=-1
 stop_stage=100
 save_steps=10000
 logging_steps=100
-n_jobs=16      # number of parallel jobs in feature extraction
+n_jobs=5      # number of parallel jobs in feature extraction
 debug=no
 
 # data related
@@ -167,12 +167,18 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
 
     cp exp/text-only-exhaustive/vocab.txt ${expdir}
 
+    # Decide log file
+    if ${ppl} = "yes"; then
+        log_name=ppl
+    else
+        log_name=decoding
+    fi
+
     # Actual decoding
-    pids=()
     [ ! -e "${expdir}/${set_type}/log" ] && mkdir -p "${expdir}/${set_type}/log"
     local/make_subset_data.sh "${data_dir}/original/${set_type}.txt" "${n_jobs}" "${expdir}/${set_type}"
     echo $(date) "Decoding..."
-    ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/decoding.JOB.log" \
+    ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/${log_name}.JOB.log" \
         python decode.py \
             --acoustic_encoder_type=${acoustic_encoder_type} \
             --fusion_place=${fusion_place} \
@@ -185,9 +191,13 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
             --model_name_or_path=${expdir} \
             --overwrite_cache \
             --scp "${expdir}/${set_type}/JOB.scp" \
-            --mfcc_dir=${processed_mfcc_dir} & pids+=($!)
-    i=0; for pid in "${pids[@]}"; do wait "${pid}" || ((++i)); done
-    [ "${i}" -gt 0 ] && echo "$0: ${i} background jobs are failed." && exit 1;
-    echo $(date) "Successfully finished decoding."
+            --mfcc_dir=${processed_mfcc_dir}
 
+    if ${ppl} = "yes"; then
+        for i in $(seq 1 ${n_jobs}); do
+            grep 'ppl' ${expdir}/${set_type}/log/${log_name}.${i}.log | awk '{print $10}'
+        done
+    fi
+
+    echo "Decoding finished."
 fi

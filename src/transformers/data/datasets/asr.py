@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import List, Optional, Union
 
+import random
 import torch
 from torch.utils.data.dataset import Dataset
 
@@ -213,6 +214,7 @@ class ASRTextDataset(Dataset):
                     examples = self.processor.get_test_examples(args.data_dir)
                 else:
                     examples = self.processor.get_train_examples(args.data_dir)
+                    examples = random.shuffle(examples)
                 if limit_length is not None:
                     examples = examples[:limit_length]
                 self.features = asr_convert_examples_to_features(
