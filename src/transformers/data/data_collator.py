@@ -93,12 +93,20 @@ class DataCollatorForASR:
         for f in features:
             o_input_ids = f["input_ids"]
             o_attention_mask = f["attention_mask"]
+
+            #""" Take out label and leave [SEP] """
+            #o_input_ids.pop(f["label_pos"])
+            #o_input_ids.append(0)
+            #o_attention_mask.pop(f["label_pos"])
+            #o_attention_mask.append(0)
             """ Take out label and [SEP] """
             o_input_ids[f["label_pos"]:f["label_pos"]+2] = [0] * 2
             o_attention_mask[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+
             """ Append to list """
             processed_input_ids.append(o_input_ids)
             processed_attention_mask.append(o_attention_mask)
+
         """ Convert to tensor """
         batch["input_ids"] = torch.tensor(processed_input_ids)
         batch["attention_mask"] = torch.tensor(processed_attention_mask)
@@ -118,7 +126,7 @@ class DataCollatorForASR:
             # """ 2. Add one more empty frame (correspond to [SEP]) """
             # appended_mfccs = [np.pad(mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant") for mfccs in reversed_mfccs]
             """ 3. Convert to tensor and pad """
-            #mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
+            #tensor_mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
             tensor_mfccs = [torch.tensor(mfccs) for mfccs in reversed_mfccs]
             max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in tensor_mfccs])
             max_frame_length = max([mfcc.shape[1] for mfcc in tensor_mfccs])

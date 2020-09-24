@@ -1317,11 +1317,11 @@ class MFCCEncoder(torch.nn.Module):
         super(MFCCEncoder, self).__init__()
         self.conv = torch.nn.Sequential(
             torch.nn.Conv2d(1, c, 3, 1, bias=False),
-            #torch.nn.ReLU(),
-            torch.nn.Tanh(),
+            torch.nn.ReLU(),
+            #torch.nn.Tanh(),
             torch.nn.Conv2d(c, c, 3, 1),
-            #torch.nn.ReLU(),
-            torch.nn.Tanh(),
+            torch.nn.ReLU(),
+            #torch.nn.Tanh(),
         )
         #self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
         self.pool = torch.nn.AdaptiveAvgPool2d((odim, 1))
