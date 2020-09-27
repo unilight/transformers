@@ -8,15 +8,15 @@ pip install -e ../../ || exit 1;
 # general
 stage=-1
 stop_stage=100
-save_steps=10000
-logging_steps=100
+save_steps=100000
+logging_steps=1000
 n_jobs=5      # number of parallel jobs in feature extraction
 debug=no
 
 # data related
 data_dir=data
 output_dir=output
-alignment_dir=data/alignment
+alignment_dir=data/new_alignment
 mfcc_dir=data/mfcc
 processed_mfcc_dir=data/processed_mfcc
 
@@ -40,6 +40,8 @@ ppl=no
 model_dir=
 beam_size=10
 set_type="dev"
+lm_weight=0.0
+lm_model_path=rnnlm/init.bin
 
 # exp tag
 tag="default"  # tag for managing experiments.
@@ -49,8 +51,6 @@ tag="default"  # tag for managing experiments.
 set -e
 set -u
 set -o pipefail
-
-echo $PATH
 
 if [ ${stage} -le 1 ] && [ ${stop_stage} -ge 1 ]; then
     python run_language_modeling.py \
@@ -168,7 +168,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     cp exp/text-only-exhaustive/vocab.txt ${expdir}
 
     # Decide log file
-    if ${ppl} = "yes"; then
+    if [ ${ppl} = "yes" ]; then
         log_name=ppl
     else
         log_name=decoding
@@ -191,13 +191,42 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
             --model_name_or_path=${expdir} \
             --overwrite_cache \
             --scp "${expdir}/${set_type}/JOB.scp" \
-            --mfcc_dir=${processed_mfcc_dir}
+            --mfcc_dir=${processed_mfcc_dir} \
+            --result_path="${expdir}/${set_type}/asr_results.JOB.txt" \
+            --lm_weight=${lm_weight} \
+            --lm_model_path=${lm_model_path}
 
-    if ${ppl} = "yes"; then
+    if [ ${ppl} = "yes" ]; then
         for i in $(seq 1 ${n_jobs}); do
             grep 'ppl' ${expdir}/${set_type}/log/${log_name}.${i}.log | awk '{print $10}'
         done
     fi
 
     echo "Decoding finished."
+fi
+
+
+if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
+    echo "stage 7: Error rate calculation"
+
+    if [ -z ${model_dir} ]; then
+        expdir=exp/${tag}
+    else
+        expdir=${model_dir}
+    fi
+
+    cat ${expdir}/${set_type}/asr_results.*.txt > ${expdir}/${set_type}/asr_results.txt
+
+    python local/result2trn.py \
+        --result_file ${expdir}/${set_type}/asr_results.txt \
+        --refs ${expdir}/${set_type}/ref.trn \
+        --hyps ${expdir}/${set_type}/hyp.trn
+
+    /home/huang18/VC/Experiments/espnet/tools/kaldi/tools/sctk-2.4.10/bin/sclite \
+        -r ${expdir}/${set_type}/ref.trn trn \
+        -h ${expdir}/${set_type}/hyp.trn \
+        -i rm -o all stdout > ${expdir}/${set_type}/result.txt
+
+    grep -e Avg -e SPKR -m 2 ${expdir}/${set_type}/result.txt
+
 fi

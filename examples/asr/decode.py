@@ -25,9 +25,11 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 import h5py
+import kenlm
 import numpy as np
 from scipy.special import softmax
 from tqdm.auto import tqdm, trange
+from typing import List, NamedTuple
 import torch
 
 from transformers import ASRDataTrainingArguments as DataTrainingArguments
@@ -91,9 +93,73 @@ class DecodeArguments:
     """
     Arguments related to decoding.
     """
+    result_path: str = field(metadata={"help": "Path to the result."})
     set_type: str = field(default="dev", metadata={"help": "Whether to run perplexity."})
     do_perplexity: str = field(default="no", metadata={"help": "Whether to run perplexity."})
     beam_size: int = field(default=10, metadata={"help": "Beam size."})
+    lm_weight: float = field(default=0.0, metadata={"help": "Language model weight."})
+    lm_model_path: str = field(default=None, metadata={"help": "Language model file path."})
+
+class Hypothesis(NamedTuple):
+    """ Hypothesis data type.
+        Args:
+            hyp (str): An hypothesis string, separated by space.
+            hyp_ids (list[int]): An hypothesis, which is a list of id.
+    """
+
+    score: float = 0.0
+    state: str = " "
+    state_ids: List[int] = list()
+
+def sort_hyps(hyps):
+    #return sorted(hyps, key= lambda k : k.score, reverse=True)
+    return hyps.sort(key= lambda k : k[0], reverse=True)
+
+class Scorer:
+
+    def __init__(self, tokenizer, lm, lm_weight, beam_size):
+        self.tokenizer = tokenizer
+        self.vocab = tokenizer.get_vocab()
+        self.lm = lm
+        self.lm_weight = lm_weight
+        self.vocab_list = list(self.vocab.keys())
+        self.beam_size = beam_size
+
+    def score(self, bert_log_likelihood, hyp):
+        """
+            Given current step bert_log_likelihood and an hypothesis,
+            compute the lm_log_likelihood and add them up
+            to returna a list of SORTED hypotheses.
+        """
+
+        if self.lm_weight > 0:
+            # Add lm ll with bert ll to form current ll
+            current_step_hyps = [None] * len(self.vocab)
+            for char, idx in self.vocab.items():
+                new_score = hyp[0] + (1-self.lm_weight) * bert_log_likelihood[idx] - self.lm_weight * self.lm.score(new_state, bos = True, eos = False)
+                new_state = hyp[1] + char + " "
+                new_state_ids = hyp[2] + [idx]
+                current_step_hyps[idx] = Hypothesis(
+                    # NOTE: Minus the lm score because it is negative
+                    score = new_score,
+                    state = new_state,
+                    state_ids = new_state_ids
+                )
+            sort_hyps(current_step_hyps)
+        else:
+            n_best_ids = np.array(bert_log_likelihood).argsort()[::-1][:self.beam_size]
+            current_step_hyps = [
+                Hypothesis(
+                    score = bert_log_likelihood[idx] + hyp[0],
+                    state = hyp[1] + self.vocab_list[idx] + " ",
+                    state_ids = hyp[2] + [idx]
+                ) for idx in n_best_ids
+            ]
+
+        # Sort current ll
+        # sorted_current_step_hyps = current_step_hyps.copy()
+        return current_step_hyps
+
 
 
 def main():
@@ -143,6 +209,7 @@ def main():
     config.acoustic_encoder_type = model_args.acoustic_encoder_type
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
+    vocab = tokenizer.get_vocab()
 
     device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
     model = BertForASR.from_pretrained(
@@ -154,6 +221,10 @@ def main():
     if torch.cuda.is_available():
         model.cuda()
     model.eval()
+
+    lm = kenlm.Model(decode_args.lm_model_path)
+
+    scorer = Scorer(tokenizer, lm, decode_args.lm_weight, decode_args.beam_size)
 
     # Get datasets
     logger.info("*** Building Evaluation dataset ***")
@@ -222,14 +293,16 @@ def main():
         logger.info("  %s = %s", "ppl", float(sum(all_ppl) / len(all_ppl)) )
         return
 
+    ################################################
     # Decode
     logger.info("*** Decoding start ***")
 
-    output_file = os.path.join(training_args.output_dir, "dev_asr_results.txt")
+    output_file = os.path.join(decode_args.result_path)
     with open(output_file, "w") as writer:
         for j, example in tqdm(enumerate(eval_dataset)):
             n_best = []
-            
+            gt_rank=[]
+
             text_length = example.label_pos
             o_input_ids = example.input_ids
             with h5py.File(example.mfcc_loader, 'r') as loader:
@@ -255,17 +328,19 @@ def main():
                             token_type_ids = token_type_ids,
                             inputs_mfccs = mfccs
                         )
-                        log_likelihood = np.squeeze(outputs[0].cpu().numpy())
-                        n_best_ids = log_likelihood.argsort()[::-1][:decode_args.beam_size]
-                        for best_id in n_best_ids:
-                            n_best.append(([best_id], log_likelihood[best_id]))
+                        bert_log_likelihood = np.squeeze(outputs[0].cpu().numpy()).tolist()
+                        current_step_hyps = scorer.score(bert_log_likelihood, Hypothesis())
+                        #gt_rank.append(best_ids.tolist().index(example.input_ids[i+1]))
+                        #sort_hyps(current_step_hyps)
+                        #n_best = current_step_hyps[:decode_args.beam_size]
+                        n_best = current_step_hyps
 
                 else:
                     mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i]]).unsqueeze(0)
                     new_n_best = []
                     for b in range(decode_args.beam_size):
                         input_ids = torch.tensor(
-                            [o_input_ids[0]] + n_best[b][0]
+                            [o_input_ids[0]] + n_best[b][2]
                         ).unsqueeze(0).to(device)
                         with torch.no_grad():
                             outputs = model(input_ids,
@@ -273,25 +348,38 @@ def main():
                                 token_type_ids = token_type_ids,
                                 inputs_mfccs = mfccs
                             )
-                            log_likelihood = np.squeeze(outputs[0].cpu().numpy())
-                            n_best_ids = log_likelihood.argsort()[::-1][:decode_args.beam_size]
+                            bert_log_likelihood = np.squeeze(outputs[0].cpu().numpy()).tolist()
+                            current_step_hyps = scorer.score(bert_log_likelihood, n_best[b])
                             #print(n_best_ids)
                             #print(log_likelihood[n_best_ids])
-                            for best_id in n_best_ids:
-                                new_n_best.append((n_best[b][0] + [best_id], n_best[b][1]+log_likelihood[best_id]))
 
-                    n_best = sorted(new_n_best, key=lambda x: x[1])[:decode_args.beam_size]
+                            #new_n_best.extend(current_step_hyps[:decode_args.beam_size])
+                            new_n_best.extend(current_step_hyps)
+
+                    sort_hyps(new_n_best)
+                    n_best = new_n_best[:decode_args.beam_size]
+
+                    # Find if in new_n_best_sorted
+                    #label_list = [item for item in new_n_best_sorted if item[0][-1] == example.input_ids[i+1]]
+                    #if len(label_list) > 0:
+                    #    gt_rank.append(
+                    #        new_n_best_sorted.index(label_list[0])
+                    #    )
+                    #else:
+                    #    gt_rank.append(-1)
                 #print("Time step", i, ", best hypothesis:", tokenizer.decode(n_best[0][0]).replace(" ", ""))
 
 
 
             result_tuple=[
                 tokenizer.decode(example.input_ids[1:text_length+1]).replace(" ", ""),
-                tokenizer.decode(n_best[0][0]).replace(" ", "")
+                n_best[0][1].replace(" ", "")
+                #tokenizer.decode(n_best[0][0]).replace(" ", "")
             ]
             logger.info("{}/{}".format(j, len(eval_dataset)))
             logging.info("Original:   {}".format(result_tuple[0]))
             logging.info("Prediction: {}".format(result_tuple[1]))
+            #logging.info("GT ranking: {}".format(gt_rank))
             writer.write("Original:   {}\n".format(result_tuple[0]))
             writer.write("Predition:  {}\n".format(result_tuple[1]))
             writer.flush()

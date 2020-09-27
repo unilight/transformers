@@ -5,6 +5,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.functional import pad
 
+import copy
 import h5py
 import numpy as np
 
@@ -90,8 +91,8 @@ class DataCollatorForASR:
         processed_input_ids = []
         processed_attention_mask = []
         for f in features:
-            o_input_ids = f["input_ids"]
-            o_attention_mask = f["attention_mask"]
+            o_input_ids = copy.deepcopy(f["input_ids"])
+            o_attention_mask = copy.deepcopy(f["attention_mask"])
 
             #""" Take out label and leave [SEP] """
             #o_input_ids.pop(f["label_pos"])
@@ -148,6 +149,11 @@ class DataCollatorForASR:
         #for k in batch:
         #    print(k, batch[k][0])
         #exit()
+
+        #print(features[0]["input_ids"])
+        #print(batch["input_ids"][0])
+        #print(batch["attention_mask"][0])
+        #print(batch["labels"][0])
 
         return batch
 

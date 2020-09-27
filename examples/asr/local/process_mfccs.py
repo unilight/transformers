@@ -55,33 +55,28 @@ if __name__ == "__main__":
 
     # Read MFCCs from scp, and use alignment to split to word-level
     # Return a dict: {key: [mfccs for token 1, mfccs for token 2, ...]}
-    raw_mfccs_dict = {}
     with ReadHelper("scp:" + args.mfcc_scp) as reader:
         for fileid, mfccs in reader:
+            num_steps = len(alignments[fileid])
+            num_frames = mfccs.shape[0]
             mfcc_list = []
-            for start, duration in alignments[fileid]:
+            masks = np.zeros((num_steps, num_frames), np.int8)
+            for step, (start, duration) in enumerate(alignments[fileid]):
                 start_idx = int(float(start) / args.frame_shift)
                 end_idx = start_idx + int(float(duration) / args.frame_shift)
-                mfcc_list.append(mfccs[start_idx:end_idx])
-            raw_mfccs_dict[fileid] = mfcc_list
+                current_mfccs = mfccs[start_idx:end_idx]
+                masks[step][start_idx:end_idx] = 1
+                mfcc_list.append(current_mfccs)
 
-    # Process the MFCC list.
-    # Each processed MFCC array has shape (text_length, max_frames, feature_dim)}
-    processed_mfccs_dict = {}
-    for fileid, raw_mfccs in tqdm(raw_mfccs_dict.items()):
-        # """ 1. Take the last word to the first word. (current frame) """
-        # reversed_mfccs = [mfccs[-1]] + mfccs[:-1]
+            """ Process the MFCC list and pad each MFCC block to the same length.
+                The final processed MFCC array has shape (text_length, max_frames, feature_dim)
+            """
+            max_length = max([_mfccs.shape[0] for _mfccs in mfcc_list])
+            padded_mfccs_list = [np.pad(_mfccs, ((0, max_length - _mfccs.shape[0]), (0, 0)), mode="constant") for _mfccs in mfcc_list]
+            padded_mfccs = np.stack(padded_mfccs_list, axis=0)
 
-        """ 2. Pad to the same length. """
-        max_length = max([mfccs.shape[0] for mfccs in raw_mfccs])
-        padded_mfccs_list = [np.pad(mfccs, ((0, max_length - mfccs.shape[0]), (0, 0)), mode="constant") for mfccs in raw_mfccs]
-        padded_mfccs = np.stack(padded_mfccs_list, axis=0)
-
-        # """ 3. Add one more empty frame (correspond to [SEP]) """
-        # appended_mfccs = np.pad(padded_mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant")
-
-        """ Save """
-        with h5py.File(os.path.join(args.output_dir, fileid + ".hdf5"), "w") as f:
-            f.create_dataset("mfccs", data=padded_mfccs)
-            #f.create_dataset("mfccs", data=appended_mfccs)
-
+            """ Save """
+            with h5py.File(os.path.join(args.output_dir, fileid + ".hdf5"), "w") as f:
+                f.create_dataset("raw_mfccs", data=mfccs)
+                f.create_dataset("padded_mfccs", data=padded_mfccs)
+                f.create_dataset("masks", data=masks)

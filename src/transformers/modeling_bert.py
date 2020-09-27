@@ -1334,14 +1334,15 @@ class MFCCEncoder(torch.nn.Module):
         super(MFCCEncoder, self).__init__()
         self.conv = torch.nn.Sequential(
             torch.nn.Conv2d(1, c, 3, 1, bias=False),
-            torch.nn.ReLU(),
-            #torch.nn.Tanh(),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
             torch.nn.Conv2d(c, c, 3, 1),
-            torch.nn.ReLU(),
-            #torch.nn.Tanh(),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
         )
         #self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
-        self.pool = torch.nn.AdaptiveAvgPool2d((odim, 1))
+        self.pool = torch.nn.AdaptiveAvgPool2d((c, 1))
+        self.projection = nn.Linear(c, odim)
 
     def forward(self, x):
         """
@@ -1350,18 +1351,55 @@ class MFCCEncoder(torch.nn.Module):
         """
 
         # Input: (b, t, f, d)
-        b, t, f, d = x.size()
-
         # To do conv2d, we reshape to (b * t, 1, f, d)
+        b, t, f, d = x.size()
         x = x.view(b * t, 1, f, d)
-        x = self.conv(x) # (b * t, 768, f-4, d-4)
-
+        x = self.conv(x) # (b * t, c, f-4, d-4)
         # reshape back to (b, t, ...)
-        _, odim, newf, newd = x.size()
-        x = x.view(b, t, odim, -1) # (b, t, odim, f-4 * d-4)
+        _, c, newf, newd = x.size()
+        x = x.view(b, t, c, -1) # (b, t, c, f-4 * d-4)
 
+        # Pooling and projection
         x = self.pool(x)
         x = x.squeeze(-1)
+        x = self.projection(x)
+        return x
+
+class MFCCConv1dEncoder(torch.nn.Module):
+    """Encoder for MFCCs.
+    """
+
+    def __init__(self, c, odim):
+        super(MFCCEncoder, self).__init__()
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(1, c, 3, 1, bias=False),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
+            torch.nn.Conv2d(c, c, 3, 1),
+            #torch.nn.ReLU(),
+            torch.nn.Tanh(),
+        )
+        self.projection = nn.Linear(c, odim)
+
+    def forward(self, x):
+        """
+        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :return: torch.Tensor of shape (B, text_length, odim)
+        """
+
+        # Input: (b, t, f, d)
+        # To do conv2d, we reshape to (b * t, 1, f, d)
+        b, t, f, d = x.size()
+        x = x.view(b * t, 1, f, d)
+        x = self.conv(x) # (b * t, c, f-4, d-4)
+        # reshape back to (b, t, ...)
+        _, c, newf, newd = x.size()
+        x = x.view(b, t, c, -1) # (b, t, c, f-4 * d-4)
+
+        # Pooling and projection
+        x = self.pool(x)
+        x = x.squeeze(-1)
+        x = self.projection(x)
         return x
 
 class BertForASR(BertPreTrainedModel):

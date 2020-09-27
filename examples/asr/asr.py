@@ -25,7 +25,6 @@ from dataclasses import dataclass, field
 from typing import Optional
 
 
-#from transformers import EvalPrediction, GlueDataset
 from transformers import ASRDataTrainingArguments as DataTrainingArguments
 from transformers import (
     AutoConfig,
@@ -171,9 +170,9 @@ def main():
         raise ValueError
 
     model.resize_token_embeddings(len(tokenizer))
-    
+
     # Optionally freeze parameters
-    freeze_mods = [str(mod) for mod in custom_args.freeze_mods.split(",") if mod != ""] 
+    freeze_mods = [str(mod) for mod in custom_args.freeze_mods.split(",") if mod != ""]
     for mod, param in model.named_parameters():
         if any(mod.startswith(key) for key in freeze_mods):
             logging.info("freezing %s" % mod)
@@ -193,7 +192,7 @@ def main():
         if training_args.do_train else None
     )
     data_collator = DataCollatorForASR(max_text_length = data_args.max_seq_length)
-    
+
     # Initialize our Trainer
     trainer = Trainer(
         model=model,
