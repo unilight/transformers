@@ -16,7 +16,8 @@ debug=no
 # data related
 data_dir=data
 output_dir=output
-alignment_dir=data/new_alignment
+#alignment_dir=data/new_alignment
+alignment_dir=data/alignment
 mfcc_dir=data/mfcc
 processed_mfcc_dir=data/processed_mfcc
 
@@ -30,6 +31,7 @@ use_audio=
 exhaustion=
 fusion_place="first"
 acoustic_encoder_type="conv"
+acoustic_encoder_segment="first"
 
 # model related
 model_type=bert
@@ -110,6 +112,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     expdir=exp/${tag}
 
     python asr.py \
+        --acoustic_encoder_segment=${acoustic_encoder_segment} \
         --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
         --exhaustion=${exhaustion} \

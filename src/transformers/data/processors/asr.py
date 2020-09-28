@@ -131,9 +131,9 @@ def _asr_convert_examples_to_features(
     start = time.time()
     batch_encoding = tokenizer(
         [example.text for example in examples],
-        max_length=max_length,
-        padding="max_length",
-        truncation=True,
+        #max_length=max_length,
+        #padding="max_length",
+        #truncation=True,
     )
     print("Tokenization took {:.1f} s".format(time.time() - start))
 

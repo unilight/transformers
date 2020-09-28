@@ -1298,12 +1298,23 @@ class MFCCAvgEncoder(torch.nn.Module):
         super(MFCCAvgEncoder, self).__init__()
         self.projection = nn.Linear(idim, odim)
 
-    def forward(self, x):
+    def forward(self, x, x_masks):
         """
-        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
         :return: torch.Tensor of shape (B, text_length, odim)
         """
-        x = torch.mean(x, 2)
+        # Must segment first
+        # shape: (B, text_length, frame_length, dimension)
+        x = x.unsqueeze(1) * x_masks.unsqueeze(-1)
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        x = torch.sum(x, 2)
+        x = x / torch.sum(x_masks, 2, keepdim=True)
+        x[torch.isnan(x)] = 0.0
+
+        # projection
         x = self.projection(x)
         return x
 
@@ -1369,38 +1380,62 @@ class MFCCConv1dEncoder(torch.nn.Module):
     """Encoder for MFCCs.
     """
 
-    def __init__(self, c, odim):
-        super(MFCCEncoder, self).__init__()
+    def __init__(self, idim, c, odim, segment="first"):
+        super(MFCCConv1dEncoder, self).__init__()
         self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(1, c, 3, 1, bias=False),
-            #torch.nn.ReLU(),
+            torch.nn.Conv2d(1, c, (3, 1), 1, padding=(1, 0), bias=False),
             torch.nn.Tanh(),
-            torch.nn.Conv2d(c, c, 3, 1),
-            #torch.nn.ReLU(),
+            torch.nn.Conv2d(c, c, (3, 1), 1, padding=(1, 0)),
+            torch.nn.Tanh(),
+            torch.nn.Conv2d(c, c, (3, 1), 1, padding=(1, 0)),
             torch.nn.Tanh(),
         )
-        self.projection = nn.Linear(c, odim)
+        self.c = c
+        self.projection = nn.Linear(idim, odim)
+        self.segment = segment
 
-    def forward(self, x):
+    def forward(self, x, x_masks):
         """
-        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
         :return: torch.Tensor of shape (B, text_length, odim)
         """
+        if self.segment == "later":
+            # Input: (b, f, d)
+            # To do conv2d, we reshape to (b, 1, f, d)
+            x = x.unsqueeze(1)
+            x = self.conv(x) # (b, c, f, d)
 
-        # Input: (b, t, f, d)
-        # To do conv2d, we reshape to (b * t, 1, f, d)
-        b, t, f, d = x.size()
-        x = x.view(b * t, 1, f, d)
-        x = self.conv(x) # (b * t, c, f-4, d-4)
-        # reshape back to (b, t, ...)
-        _, c, newf, newd = x.size()
-        x = x.view(b, t, c, -1) # (b, t, c, f-4 * d-4)
+            # segment later
+            # (B, 1, c, f, d) * (B, t, 1, f, 1)
+            # output shape: (B, t, c, f, d)
+            x = x.unsqueeze(1) * x_masks.unsqueeze(2).unsqueeze(-1)
 
-        # Pooling and projection
-        x = self.pool(x)
-        x = x.squeeze(-1)
+        if self.segment == "first":
+            # segment first
+            # shape: (B, text_length, frame_length, dimension)
+            x = x.unsqueeze(1) * x_masks.unsqueeze(-1)
+
+            # Input: (b, t, f, d)
+            # To do conv2d, we reshape to (b * t, 1, f, d)
+            b, t, f, d = x.size()
+            x = x.view(b * t, 1, f, d)
+            x = self.conv(x) # (b * t, c, f, d)
+            x = x.view(b, t, self.c, f, d) # (b, t, c, f, d)
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        x = torch.mean(x, 2) # avg along channel axis first -> (B, t, f, d)
+        x = torch.sum(x, 2)
+        x = x / torch.sum(x_masks, 2, keepdim=True)
+        x[torch.isnan(x)] = 0.0
+        print(x.shape)
+
+        # projection
         x = self.projection(x)
         return x
+
+
 
 class BertForASR(BertPreTrainedModel):
     def __init__(self, config):
@@ -1414,6 +1449,8 @@ class BertForASR(BertPreTrainedModel):
         if config.use_audio:
             if config.acoustic_encoder_type == "conv":
                 self.encoder = MFCCEncoder(128, config.hidden_size)
+            if config.acoustic_encoder_type == "conv1d":
+                self.encoder = MFCCConv1dEncoder(83, 128, config.hidden_size, config.acoustic_encoder_segment)
             elif config.acoustic_encoder_type == "transformer":
                 self.encoder = MFCCTransformerEncoder(83, 1, config)
             elif config.acoustic_encoder_type == "avg":
@@ -1433,6 +1470,7 @@ class BertForASR(BertPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         inputs_mfccs=None,
+        inputs_mfccs_masks=None,
         labels=None,
         output_attentions=None,
         output_hidden_states=None,
@@ -1449,8 +1487,8 @@ class BertForASR(BertPreTrainedModel):
 
         #print("Inputs mfccs shape", inputs_mfccs.shape)
         if self.config.use_audio:
-            if self.config.acoustic_encoder_type == "conv":
-                acoustic_embeddings = self.encoder(inputs_mfccs)
+            if self.config.acoustic_encoder_type in ["conv", "conv1d"]:
+                acoustic_embeddings = self.encoder(inputs_mfccs, inputs_mfccs_masks)
             elif self.config.acoustic_encoder_type == "transformer":
                 # The BertEncoder in HFT does not accept 4-dim input, 
                 # So we do this sentence by sentence
@@ -1458,7 +1496,7 @@ class BertForASR(BertPreTrainedModel):
                     [self.encoder(mfccs) for mfccs in torch.unbind(inputs_mfccs)]
                 )
             elif self.config.acoustic_encoder_type == "avg":
-                acoustic_embeddings = self.encoder(inputs_mfccs)
+                acoustic_embeddings = self.encoder(inputs_mfccs, inputs_mfccs_masks)
             else:
                 raise ValueError("unknown acoustic_encoder_type")
 
