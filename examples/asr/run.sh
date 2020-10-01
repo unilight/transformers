@@ -8,7 +8,7 @@ pip install -e ../../ || exit 1;
 # general
 stage=-1
 stop_stage=100
-save_steps=100000
+save_steps=50000
 logging_steps=1000
 n_jobs=5      # number of parallel jobs in feature extraction
 debug=no
@@ -16,8 +16,8 @@ debug=no
 # data related
 data_dir=data
 output_dir=output
-#alignment_dir=data/new_alignment
-alignment_dir=data/alignment
+alignment_dir=data/new_alignment
+#alignment_dir=data/alignment
 mfcc_dir=data/mfcc
 processed_mfcc_dir=data/processed_mfcc
 
@@ -32,6 +32,7 @@ exhaustion=
 fusion_place="first"
 acoustic_encoder_type="conv"
 acoustic_encoder_segment="first"
+acoustic_encoder_layers=1
 
 # model related
 model_type=bert
@@ -112,6 +113,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     expdir=exp/${tag}
 
     python asr.py \
+        --acoustic_encoder_layers=${acoustic_encoder_layers} \
         --acoustic_encoder_segment=${acoustic_encoder_segment} \
         --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
@@ -145,6 +147,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     cp exp/text-only-exhaustive/vocab.txt ${expdir}
 
     python decode.py \
+        --acoustic_encoder_layers=${acoustic_encoder_layers} \
         --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
         --do_perplexity=${ppl} \
@@ -183,6 +186,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     echo $(date) "Decoding..."
     ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/${log_name}.JOB.log" \
         python decode.py \
+            --acoustic_encoder_segment=${acoustic_encoder_segment} \
             --acoustic_encoder_type=${acoustic_encoder_type} \
             --fusion_place=${fusion_place} \
             --do_perplexity=${ppl} \

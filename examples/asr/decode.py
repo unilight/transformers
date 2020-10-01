@@ -87,6 +87,9 @@ class ModelArguments:
     acoustic_encoder_type: Optional[str] = field(
         default="conv", metadata={"help": "Acoustic encoder type."}
     )
+    acoustic_encoder_segment: Optional[str] = field(
+        default="first", metadata={"help": "Acoustic encoder segment place."}
+    )
 
 @dataclass
 class DecodeArguments:
@@ -207,6 +210,8 @@ def main():
     config.use_audio = True if data_args.use_audio == "yes" else False
     config.fusion_place = data_args.fusion_place
     config.acoustic_encoder_type = model_args.acoustic_encoder_type
+    config.acoustic_encoder_segment = model_args.acoustic_encoder_segment
+    print(config.acoustic_encoder_segment)
 
     tokenizer = AutoTokenizer.from_pretrained(model_args.model_name_or_path)
     vocab = tokenizer.get_vocab()
@@ -245,13 +250,17 @@ def main():
             o_input_ids = torch.tensor(example.input_ids).to(device)
             if config.use_audio:
                 with h5py.File(example.mfcc_loader, 'r') as loader:
-                    o_mfccs = torch.tensor(loader["mfccs"][()]).to(device)
-                max_frame, dimension = o_mfccs.shape[1:]
-                if o_mfccs.shape[0] != text_length:
+                    o_mfccs = torch.tensor(loader["raw_mfccs"][()]).unsqueeze(0).to(device)
+                    o_masks = torch.tensor(loader["masks"][()]).to(device)
+                if o_masks.shape[0] != text_length:
                     #print(o_mfccs.shape[0], text_length)
                     #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
                     #print(example.input_ids)
                     continue
+            else:
+                o_mfccs = None
+                o_masks = None
+                masks = None
 
             for i in range(text_length):
                 attention_mask = torch.ones(i+1, dtype=torch.long).unsqueeze(0).to(device)
@@ -260,11 +269,9 @@ def main():
                 input_ids = o_input_ids[:i+1].unsqueeze(0)
                 if config.use_audio:
                     if i == 0:
-                        mfccs = o_mfccs[i].unsqueeze(0).unsqueeze(0)
+                        masks = o_masks[i].unsqueeze(0).unsqueeze(0)
                     else:
-                        mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i]]).unsqueeze(0)
-                else:
-                    mfccs = None
+                        masks = torch.cat([o_masks[i].unsqueeze(0), o_masks[:i]]).unsqueeze(0)
 
                 label = o_input_ids[i+1]
 
@@ -276,7 +283,8 @@ def main():
                     outputs = model(input_ids,
                         attention_mask = attention_mask,
                         token_type_ids = token_type_ids,
-                        inputs_mfccs = mfccs,
+                        inputs_mfccs = o_mfccs,
+                        inputs_mfccs_masks = masks,
                         labels = label
                     )
                     log_likelihood = outputs[0]
@@ -306,9 +314,9 @@ def main():
             text_length = example.label_pos
             o_input_ids = example.input_ids
             with h5py.File(example.mfcc_loader, 'r') as loader:
-                o_mfccs = torch.tensor(loader["mfccs"][()]).to(device)
-            max_frame, dimension = o_mfccs.shape[1:]
-            if o_mfccs.shape[0] != text_length:
+                o_mfccs = torch.tensor(loader["raw_mfccs"][()]).unsqueeze(0).to(device)
+                o_masks = torch.tensor(loader["masks"][()]).to(device)
+            if o_masks.shape[0] != text_length:
                 #print(o_mfccs.shape[0], text_length)
                 #print("original:  ", tokenizer.decode(example.input_ids[1:text_length]+[example.label]).replace(" ", ""))
                 #print(example.input_ids)
@@ -320,13 +328,14 @@ def main():
                 token_type_ids = torch.zeros(i+1, dtype=torch.long).unsqueeze(0).to(device)
 
                 if i == 0:
-                    mfccs = o_mfccs[i].unsqueeze(0).unsqueeze(0)
+                    masks = o_masks[i].unsqueeze(0).unsqueeze(0)
                     input_ids = torch.tensor(o_input_ids[:i+1]).unsqueeze(0).to(device)
                     with torch.no_grad():
                         outputs = model(input_ids,
                             attention_mask = attention_mask,
                             token_type_ids = token_type_ids,
-                            inputs_mfccs = mfccs
+                            inputs_mfccs = o_mfccs,
+                            inputs_mfccs_masks = masks,
                         )
                         bert_log_likelihood = np.squeeze(outputs[0].cpu().numpy()).tolist()
                         current_step_hyps = scorer.score(bert_log_likelihood, Hypothesis())
@@ -336,7 +345,7 @@ def main():
                         n_best = current_step_hyps
 
                 else:
-                    mfccs = torch.cat([o_mfccs[i].unsqueeze(0), o_mfccs[:i]]).unsqueeze(0)
+                    masks = torch.cat([o_masks[i].unsqueeze(0), o_masks[:i]]).unsqueeze(0)
                     new_n_best = []
                     for b in range(decode_args.beam_size):
                         input_ids = torch.tensor(
@@ -346,7 +355,8 @@ def main():
                             outputs = model(input_ids,
                                 attention_mask = attention_mask,
                                 token_type_ids = token_type_ids,
-                                inputs_mfccs = mfccs
+                                inputs_mfccs = o_mfccs,
+                                inputs_mfccs_masks = masks,
                             )
                             bert_log_likelihood = np.squeeze(outputs[0].cpu().numpy()).tolist()
                             current_step_hyps = scorer.score(bert_log_likelihood, n_best[b])
