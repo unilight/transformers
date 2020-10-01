@@ -1,4 +1,3 @@
-import random
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, NewType, Optional, Tuple, Union
 
@@ -6,6 +5,7 @@ import torch
 from torch.nn.utils.rnn import pad_sequence
 from torch.nn.functional import pad
 
+import copy
 import h5py
 import numpy as np
 
@@ -70,6 +70,19 @@ def default_data_collator(features: List[InputDataClass]) -> Dict[str, torch.Ten
 
     return batch
 
+def fast_pad_sequence(sequences, axis, max_length=None, batch_first=True):
+    """
+    :param List(torch.Tensor) x: input tensor of shape (B, text_length, frame_length, dimension)
+    :return: torch.Tensor of shape (B, text_length, odim)
+    """
+    max_length = self.max_text_length if self.max_text_length else max([seq.shape[axis] for seq in sequences])
+    num_axes = len(sequences[0].shape)
+    return_list = []
+    for seq in sequences:
+        pad_tuple = [0] * num_axes * 2
+        pad_tuple[axis*2+1] = max_length - seq.shape[axis]
+        return_list.append(pad(seq, pad_tuple))
+    return return_list
 
 @dataclass
 class DataCollatorForASR:
@@ -87,60 +100,93 @@ class DataCollatorForASR:
         # Special handling for labels.
         batch["labels"] = torch.tensor([f["input_ids"][f["label_pos"]] for f in features], dtype=torch.long)
 
-        # Special handling for input_ids and attention_masks
+        # Special handling for input_ids, attention_masks and token_type_ids
         processed_input_ids = []
         processed_attention_mask = []
+        processed_token_type_ids = []
         for f in features:
-            o_input_ids = f["input_ids"]
-            o_attention_mask = f["attention_mask"]
+            o_input_ids = copy.deepcopy(f["input_ids"])
+            o_attention_mask = copy.deepcopy(f["attention_mask"])
+            o_token_type_ids = copy.deepcopy(f["token_type_ids"])
+
+            #""" Take out label and leave [SEP] """
+            #o_input_ids.pop(f["label_pos"])
+            #o_input_ids.append(0)
+            #o_attention_mask.pop(f["label_pos"])
+            #o_attention_mask.append(0)
             """ Take out label and [SEP] """
-            o_input_ids[f["label_pos"]:f["label_pos"]+2] = [0] * 2
-            o_attention_mask[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+            #o_input_ids[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+            #o_attention_mask[f["label_pos"]:f["label_pos"]+2] = [0] * 2
+            o_input_ids = o_input_ids[:-2]
+            o_attention_mask = o_attention_mask[:-2]
+            o_token_type_ids = o_token_type_ids[:-2]
+
             """ Append to list """
-            processed_input_ids.append(o_input_ids)
-            processed_attention_mask.append(o_attention_mask)
-        """ Convert to tensor """
-        batch["input_ids"] = torch.tensor(processed_input_ids)
-        batch["attention_mask"] = torch.tensor(processed_attention_mask)
+            #processed_input_ids.append(o_input_ids)
+            #processed_attention_mask.append(o_attention_mask)
+            processed_input_ids.append(torch.tensor(o_input_ids))
+            processed_attention_mask.append(torch.tensor(o_attention_mask))
+            processed_token_type_ids.append(torch.tensor(o_token_type_ids))
+
+        #""" Convert to tensor """
+        #batch["input_ids"] = torch.tensor(processed_input_ids)
+        #batch["attention_mask"] = torch.tensor(processed_attention_mask)
+        """ Padding """
+        batch["input_ids"] = pad_sequence(processed_input_ids, batch_first=True)
+        batch["attention_mask"] = pad_sequence(processed_attention_mask, batch_first=True)
+        batch["token_type_ids"] = pad_sequence(processed_token_type_ids, batch_first=True)
 
         # token_type_ids doesn't need processing
-        batch["token_type_ids"] = torch.tensor([f["token_type_ids"] for f in features])
+        #batch["token_type_ids"] = pad_sequence([torch.tensor(f["token_type_ids"][:-2]) for f in features], batch_first=True)
 
         # Special handling for MFCCS.
         if first["mfcc_loader"] is not None:
-            """ 0. Load the original mfcc"""
+            """ Load the original MFCCs and the masks"""
             o_mfccs = []
+            o_masks = []
             for f in features:
                 with h5py.File(f["mfcc_loader"], 'r') as loader:
-                    o_mfccs.append(loader["mfccs"][()][:f["label_pos"]])
-            """ 1. Take the last word to the first word. (current frame) """
-            reversed_mfccs = [np.concatenate([mfccs[-1][np.newaxis,...], mfccs[:-1]]) for mfccs in o_mfccs]
-            # """ 2. Add one more empty frame (correspond to [SEP]) """
-            # appended_mfccs = [np.pad(mfccs, ((0, 1), (0, 0), (0, 0)), mode="constant") for mfccs in reversed_mfccs]
-            """ 3. Convert to tensor and pad """
-            #mfccs = [torch.tensor(mfccs) for mfccs in appended_mfccs]
-            tensor_mfccs = [torch.tensor(mfccs) for mfccs in reversed_mfccs]
-            max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in tensor_mfccs])
-            max_frame_length = max([mfcc.shape[1] for mfcc in tensor_mfccs])
-            frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in tensor_mfccs]
-            text_padded_mfccs = [pad(mfcc, (0, 0, 0, 0, 0, max_text_length - mfcc.shape[0])) for mfcc in frame_padded_mfccs]
-            all_mfccs = torch.stack(text_padded_mfccs)
+                    o_mfccs.append(loader["raw_mfccs"][()])
+                    o_masks.append(loader["masks"][()][:f["label_pos"]])
+
+            """ MFCC shape: [B, max_frame_length, feature_dim] """
+            """ Take the last word to the first word. (current frame) """
+            #reversed_mfccs = [np.concatenate([mfccs[-1][np.newaxis,...], mfccs[:-1]]) for mfccs in o_mfccs]
+
+            """ Convert to tensor and pad """
+            #tensor_mfccs = [torch.tensor(mfccs) for mfccs in reversed_mfccs]
+            tensor_mfccs_list = [torch.tensor(_mfccs) for _mfccs in o_mfccs]
+            #max_text_length = self.max_text_length if self.max_text_length else max([mfcc.shape[0] for mfcc in tensor_mfccs])
+            #max_frame_length = max([mfcc.shape[1] for mfcc in tensor_mfccs])
+            #frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in tensor_mfccs]
+            #text_padded_mfccs = [pad(mfcc, (0, 0, 0, 0, 0, max_text_length - mfcc.shape[0])) for mfcc in frame_padded_mfccs]
+            #all_mfccs = torch.stack(text_padded_mfccs)
+            all_mfccs = pad_sequence(tensor_mfccs_list, batch_first=True)
             batch["inputs_mfccs"] = all_mfccs
 
-        # Handling of all other possible keys.
-        # Again, we will use the first element to figure out which key/values are not None for this model.
-        #for k, v in first.items():
-        #    if k in ["mfcc_loader", "input_ids", "attention_mask", "token_type_ids", "label_pos"]:
-        #        continue
-        #    if k not in ("label", "label_ids") and v is not None and not isinstance(v, str):
-        #        if isinstance(v, torch.Tensor):
-        #            batch[k] = torch.stack([f[k] for f in features])
-        #        else:
-        #            batch[k] = torch.tensor([f[k] for f in features])
+            """ Mask shape: [B, max_text_length, max_frame_length] """
+            """ Take the last word to the first word. (current frame) """
+            #reversed_mfccs = [np.concatenate([mfccs[-1][np.newaxis,...], mfccs[:-1]]) for mfccs in o_mfccs]
+            reversed_masks = [np.concatenate([_mask[-1][np.newaxis,...], _mask[:-1]]) for _mask in o_masks]
+            """ Convert to tensor and pad """
+            #tensor_mfccs = [torch.tensor(mfccs) for mfccs in reversed_mfccs]
+            tensor_masks_list = [torch.tensor(_masks) for _masks in reversed_masks]
+            #max_text_length = self.max_text_length if self.max_text_length else max([_masks.shape[0] for _masks in tensor_masks_list])
+            max_frame_length = max([_masks.shape[1] for _masks in tensor_masks_list])
+            frame_padded_masks = [pad(_masks, (0, max_frame_length - _masks.shape[1], 0, 0)) for _masks in tensor_masks_list]
+            #text_padded_masks = [pad(_masks, (0, 0, 0, max_text_length - _masks.shape[0])) for _masks in frame_padded_masks]
+            #all_masks = torch.stack(text_padded_masks)
+            all_masks = pad_sequence(frame_padded_masks, batch_first=True)
+            batch["inputs_mfccs_masks"] = all_masks
 
-        #for k in batch:
-        #    print(k, batch[k][0])
-        #exit()
+            #print(batch["inputs_mfccs"].shape)
+            #print(batch["inputs_mfccs_masks"].shape)
+
+        #print(features[0]["input_ids"])
+        #print(batch["input_ids"].shape)
+        #print(batch["attention_mask"].shape)
+        #print(batch["token_type_ids"].shape)
+        #print(batch["labels"][0])
 
         return batch
 
@@ -478,8 +524,8 @@ class DataCollatorForPermutationLanguageModeling:
 @dataclass
 class DataCollatorForNextSentencePrediction:
     """
-    Data collator used for language modeling.
-    - collates batches of tensors, honoring their tokenizer's pad_token
+    Data collator used for next sentence prediction.
+    - collates examples which contains pre-generated negative examples
     - preprocesses batches for masked language modeling
     """
 
@@ -490,21 +536,30 @@ class DataCollatorForNextSentencePrediction:
     nsp_probability: float = 0.5
     mlm_probability: float = 0.15
 
-    def __call__(self, examples: List[Union[List[List[int]], Dict[str, torch.Tensor]]]) -> Dict[str, torch.Tensor]:
-        if isinstance(examples[0], (dict, BatchEncoding)):
-            examples = [e["input_ids"] for e in examples]
+    def __call__(self, examples: List[Dict[str, torch.Tensor]]) -> Dict[str, torch.Tensor]:
+        """
+        The input should contain negative examples, :class:`~transformers.DataCollatorForNextSentencePrediction` will not generate any negative examples.
+        Args:
+            examples (:obj:`List[Dict]`): Each dictionary should have the following keys:
+                  - ``tokens_a``: A sequence of tokens, which should appear before ``tokens_b`` in the text.
+                  - ``tokens_b``: A sequence of tokens, which should appear after ``tokens_a`` in the text.
+                  - ``is_random_next``: 1 if this pair is generated randomly, else 0.
+        """
+
+        tokens_a = [e["tokens_a"] for e in examples]
+        tokens_b = [e["tokens_b"] for e in examples]
+        nsp_labels = [1 if e["is_random_next"] else 0 for e in examples]
 
         input_ids = []
         segment_ids = []
         attention_masks = []
-        nsp_labels = []
 
-        for i, doc in enumerate(examples):
-            input_id, segment_id, attention_mask, label = self.create_examples_from_document(doc, i, examples)
-            input_ids.extend(input_id)
-            segment_ids.extend(segment_id)
-            attention_masks.extend(attention_mask)
-            nsp_labels.extend(label)
+        assert len(tokens_a) == len(tokens_b)
+        for i in range(len(tokens_a)):
+            input_id, attention_mask, segment_id = self.create_features_from_example(tokens_a[i], tokens_b[i])
+            input_ids.append(input_id)
+            segment_ids.append(segment_id)
+            attention_masks.append(attention_mask)
         if self.mlm:
             input_ids, mlm_labels = self.mask_tokens(self._tensorize_batch(input_ids))
         else:
@@ -514,6 +569,7 @@ class DataCollatorForNextSentencePrediction:
             "input_ids": input_ids,
             "attention_mask": self._tensorize_batch(attention_masks),
             "token_type_ids": self._tensorize_batch(segment_ids),
+            "masked_lm_labels": mlm_labels if self.mlm else None,
             "next_sentence_label": torch.tensor(nsp_labels),
         }
         if self.mlm:
@@ -533,111 +589,34 @@ class DataCollatorForNextSentencePrediction:
                 )
             return pad_sequence(examples, batch_first=True, padding_value=self.tokenizer.pad_token_id)
 
-    def create_examples_from_document(
-        self, document: List[List[int]], doc_index: int, examples: List[List[List[int]]]
-    ):
+    def create_features_from_example(self, tokens_a, tokens_b):
         """Creates examples for a single document."""
 
         max_num_tokens = self.block_size - self.tokenizer.num_special_tokens_to_add(pair=True)
 
-        # We *usually* want to fill up the entire sequence since we are padding
-        # to `block_size` anyways, so short sequences are generally wasted
-        # computation. However, we *sometimes*
-        # (i.e., short_seq_prob == 0.1 == 10% of the time) want to use shorter
-        # sequences to minimize the mismatch between pre-training and fine-tuning.
-        # The `target_seq_length` is just a rough target however, whereas
-        # `block_size` is a hard limit.
-        target_seq_length = max_num_tokens
-        if random.random() < self.short_seq_probability:
-            target_seq_length = random.randint(2, max_num_tokens)
+        tokens_a, tokens_b, _ = self.tokenizer.truncate_sequences(
+            tokens_a,
+            tokens_b,
+            num_tokens_to_remove=len(tokens_a) + len(tokens_b) - max_num_tokens,
+            truncation_strategy="longest_first",
+        )
 
-        current_chunk = []  # a buffer stored current working segments
-        current_length = 0
-        i = 0
-        input_ids = []
-        segment_ids = []
-        attention_masks = []
-        labels = []
-        while i < len(document):
-            segment = document[i]
-            current_chunk.append(segment)
-            current_length += len(segment)
-            if i == len(document) - 1 or current_length >= target_seq_length:
-                if current_chunk:
-                    # `a_end` is how many segments from `current_chunk` go into the `A`
-                    # (first) sentence.
-                    a_end = 1
-                    if len(current_chunk) >= 2:
-                        a_end = random.randint(1, len(current_chunk) - 1)
+        input_id = self.tokenizer.build_inputs_with_special_tokens(tokens_a, tokens_b)
+        attention_mask = [1] * len(input_id)
+        segment_id = self.tokenizer.create_token_type_ids_from_sequences(tokens_a, tokens_b)
+        assert len(input_id) <= self.block_size
 
-                    tokens_a = []
-                    for j in range(a_end):
-                        tokens_a.extend(current_chunk[j])
+        # pad
+        while len(input_id) < self.block_size:
+            input_id.append(0)
+            attention_mask.append(0)
+            segment_id.append(0)
 
-                    tokens_b = []
+        input_id = torch.tensor(input_id)
+        attention_mask = torch.tensor(attention_mask)
+        segment_id = torch.tensor(segment_id)
 
-                    if len(current_chunk) == 1 or random.random() < self.nsp_probability:
-                        is_random_next = True
-                        target_b_length = target_seq_length - len(tokens_a)
-
-                        # This should rarely go for more than one iteration for large
-                        # corpora. However, just to be careful, we try to make sure that
-                        # the random document is not the same as the document
-                        # we're processing. Also check to make sure that the random document
-                        # is not empty.
-                        for _ in range(10):
-                            random_document_index = random.randint(0, len(examples) - 1)
-                            if random_document_index != doc_index and len(examples[random_document_index]) > 0:
-                                break
-
-                        random_document = examples[random_document_index]
-                        random_start = random.randint(0, len(random_document) - 1)
-                        for j in range(random_start, len(random_document)):
-                            tokens_b.extend(random_document[j])
-                            if len(tokens_b) >= target_b_length:
-                                break
-                        # We didn't actually use these segments so we "put them back" so
-                        # they don't go to waste.
-                        num_unused_segments = len(current_chunk) - a_end
-                        i -= num_unused_segments
-                    # Actual next
-                    else:
-                        is_random_next = False
-                        for j in range(a_end, len(current_chunk)):
-                            tokens_b.extend(current_chunk[j])
-
-                    assert len(tokens_a) >= 1
-                    assert len(tokens_b) >= 1
-
-                    tokens_a, tokens_b, _ = self.tokenizer.truncate_sequences(
-                        tokens_a,
-                        tokens_b,
-                        num_tokens_to_remove=len(tokens_a) + len(tokens_b) - max_num_tokens,
-                        truncation_strategy="longest_first",
-                    )
-
-                    input_id = self.tokenizer.build_inputs_with_special_tokens(tokens_a, tokens_b)
-                    attention_mask = [1] * len(input_id)
-                    segment_id = self.tokenizer.create_token_type_ids_from_sequences(tokens_a, tokens_b)
-                    assert len(input_id) <= self.block_size
-
-                    # pad
-                    while len(input_id) < self.block_size:
-                        input_id.append(0)
-                        attention_mask.append(0)
-                        segment_id.append(0)
-
-                    input_ids.append(torch.tensor(input_id))
-                    segment_ids.append(torch.tensor(segment_id))
-                    attention_masks.append(torch.tensor(attention_mask))
-                    labels.append(torch.tensor(1 if is_random_next else 0))
-
-                current_chunk = []
-                current_length = 0
-
-            i += 1
-
-        return input_ids, segment_ids, attention_masks, labels
+        return input_id, attention_mask, segment_id
 
     def mask_tokens(self, inputs: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """

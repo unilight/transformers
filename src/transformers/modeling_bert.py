@@ -623,7 +623,8 @@ class BertForPreTrainingOutput(ModelOutput):
 
     Args:
         loss (`optional`, returned when ``labels`` is provided, ``torch.FloatTensor`` of shape :obj:`(1,)`):
-            Total loss as the sum of the masked language modeling loss and the next sequence prediction (classification) loss.
+            Total loss as the sum of the masked language modeling loss and the next sequence prediction
+            (classification) loss.
         prediction_logits (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, config.vocab_size)`):
             Prediction scores of the language modeling head (scores for each vocabulary token before SoftMax).
         seq_relationship_logits (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, 2)`):
@@ -650,7 +651,12 @@ class BertForPreTrainingOutput(ModelOutput):
 
 
 BERT_START_DOCSTRING = r"""
-    This model is a PyTorch `torch.nn.Module <https://pytorch.org/docs/stable/nn.html#torch.nn.Module>`_ sub-class.
+
+    This model inherits from :class:`~transformers.PreTrainedModel`. Check the superclass documentation for the generic
+    methods the library implements for all its model (such as downloading or saving, resizing the input embeddings,
+    pruning heads etc.)
+
+    This model is also a PyTorch `torch.nn.Module <https://pytorch.org/docs/stable/nn.html#torch.nn.Module>`__ subclass.
     Use it as a regular PyTorch Module and refer to the PyTorch documentation for all matter related to general
     usage and behavior.
 
@@ -662,27 +668,31 @@ BERT_START_DOCSTRING = r"""
 
 BERT_INPUTS_DOCSTRING = r"""
     Args:
-        input_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`):
+        input_ids (:obj:`torch.LongTensor` of shape :obj:`({0})`):
             Indices of input sequence tokens in the vocabulary.
 
-            Indices can be obtained using :class:`transformers.BertTokenizer`.
-            See :func:`transformers.PreTrainedTokenizer.encode` and
-            :func:`transformers.PreTrainedTokenizer.__call__` for details.
+            Indices can be obtained using :class:`~transformers.BertTokenizer`.
+            See :meth:`transformers.PreTrainedTokenizer.encode` and
+            :meth:`transformers.PreTrainedTokenizer.__call__` for details.
 
             `What are input IDs? <../glossary.html#input-ids>`__
-        attention_mask (:obj:`torch.FloatTensor` of shape :obj:`{0}`, `optional`):
+        attention_mask (:obj:`torch.FloatTensor` of shape :obj:`({0})`, `optional`):
             Mask to avoid performing attention on padding token indices.
             Mask values selected in ``[0, 1]``:
-            ``1`` for tokens that are NOT MASKED, ``0`` for MASKED tokens.
+
+            - 1 for tokens that are **not masked**,
+            - 0 for tokens that are **maked**.
 
             `What are attention masks? <../glossary.html#attention-mask>`__
-        token_type_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`, `optional`):
+        token_type_ids (:obj:`torch.LongTensor` of shape :obj:`({0})`, `optional`):
             Segment token indices to indicate first and second portions of the inputs.
-            Indices are selected in ``[0, 1]``: ``0`` corresponds to a `sentence A` token, ``1``
-            corresponds to a `sentence B` token
+            Indices are selected in ``[0, 1]``:
+
+            - 0 corresponds to a `sentence A` token,
+            - 1 corresponds to a `sentence B` token.
 
             `What are token type IDs? <../glossary.html#token-type-ids>`_
-        position_ids (:obj:`torch.LongTensor` of shape :obj:`{0}`, `optional`):
+        position_ids (:obj:`torch.LongTensor` of shape :obj:`({0})`, `optional`):
             Indices of positions of each input sequence tokens in the position embeddings.
             Selected in the range ``[0, config.max_position_embeddings - 1]``.
 
@@ -690,18 +700,22 @@ BERT_INPUTS_DOCSTRING = r"""
         head_mask (:obj:`torch.FloatTensor` of shape :obj:`(num_heads,)` or :obj:`(num_layers, num_heads)`, `optional`):
             Mask to nullify selected heads of the self-attention modules.
             Mask values selected in ``[0, 1]``:
-            :obj:`1` indicates the head is **not masked**, :obj:`0` indicates the head is **masked**.
-        inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
+
+            - 1 indicates the head is **not masked**,
+            - 0 indicates the head is **masked**.
+
+        inputs_embeds (:obj:`torch.FloatTensor` of shape :obj:`({0}, hidden_size)`, `optional`):
             Optionally, instead of passing :obj:`input_ids` you can choose to directly pass an embedded representation.
-            This is useful if you want more control over how to convert `input_ids` indices into associated vectors
-            than the model's internal embedding lookup matrix.
+            This is useful if you want more control over how to convert :obj:`input_ids` indices into associated
+            vectors than the model's internal embedding lookup matrix.
         output_attentions (:obj:`bool`, `optional`):
-            If set to ``True``, the attentions tensors of all attention layers are returned. See ``attentions`` under returned tensors for more detail.
+            Whether or not to return the attentions tensors of all attention layers. See ``attentions`` under returned
+            tensors for more detail.
         output_hidden_states (:obj:`bool`, `optional`):
-            If set to ``True``, the hidden states of all layers are returned. See ``hidden_states`` under returned tensors for more detail.
+            Whether or not to return the hidden states of all layers. See ``hidden_states`` under returned tensors for
+            more detail.
         return_dict (:obj:`bool`, `optional`):
-            If set to ``True``, the model will return a :class:`~transformers.file_utils.ModelOutput` instead of a
-            plain tuple.
+            Whether or not to return a :class:`~transformers.file_utils.ModelOutput` instead of a plain tuple.
 """
 
 
@@ -714,18 +728,15 @@ class BertModel(BertPreTrainedModel):
 
     The model can behave as an encoder (with only self-attention) as well
     as a decoder, in which case a layer of cross-attention is added between
-    the self-attention layers, following the architecture described in `Attention is all you need`_ by Ashish Vaswani,
-    Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones, Aidan N. Gomez, Lukasz Kaiser and Illia Polosukhin.
+    the self-attention layers, following the architecture described in `Attention is all you need
+    <https://arxiv.org/abs/1706.03762>`__ by Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob Uszkoreit, Llion Jones,
+    Aidan N. Gomez, Lukasz Kaiser and Illia Polosukhin.
 
     To behave as an decoder the model needs to be initialized with the
     :obj:`is_decoder` argument of the configuration set to :obj:`True`.
     To be used in a Seq2Seq model, the model needs to initialized with both :obj:`is_decoder`
     argument and :obj:`add_cross_attention` set to :obj:`True`; an
     :obj:`encoder_hidden_states` is then expected as an input to the forward pass.
-
-    .. _`Attention is all you need`:
-        https://arxiv.org/abs/1706.03762
-
     """
 
     def __init__(self, config):
@@ -752,7 +763,7 @@ class BertModel(BertPreTrainedModel):
         for layer, heads in heads_to_prune.items():
             self.encoder.layer[layer].attention.prune_heads(heads)
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -782,7 +793,9 @@ class BertModel(BertPreTrainedModel):
             Mask to avoid performing attention on the padding token indices of the encoder input. This mask
             is used in the cross-attention if the model is configured as a decoder.
             Mask values selected in ``[0, 1]``:
-            ``1`` for tokens that are NOT MASKED, ``0`` for MASKED tokens.
+
+            - 1 for tokens that are **not masked**,
+            - 0 for tokens that are **maked**.
         """
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -873,7 +886,7 @@ class BertForPreTraining(BertPreTrainedModel):
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=BertForPreTrainingOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
@@ -891,22 +904,23 @@ class BertForPreTraining(BertPreTrainedModel):
         **kwargs
     ):
         r"""
-            labels (``torch.LongTensor`` of shape ``(batch_size, sequence_length)``, `optional`):
-                Labels for computing the masked language modeling loss.
-                Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
-                Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
-                in ``[0, ..., config.vocab_size]``
-            next_sentence_label (``torch.LongTensor`` of shape ``(batch_size,)``, `optional`):
-                Labels for computing the next sequence prediction (classification) loss. Input should be a sequence pair (see :obj:`input_ids` docstring)
-                Indices should be in ``[0, 1]``.
-                ``0`` indicates sequence B is a continuation of sequence A,
-                ``1`` indicates sequence B is a random sequence.
-            kwargs (:obj:`Dict[str, any]`, optional, defaults to `{}`):
-                Used to hide legacy arguments that have been deprecated.
+        labels (:obj:`torch.LongTensor` of shape ``(batch_size, sequence_length)``, `optional`):
+            Labels for computing the masked language modeling loss.
+            Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
+            Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
+            in ``[0, ..., config.vocab_size]``
+        next_sentence_label (``torch.LongTensor`` of shape ``(batch_size,)``, `optional`):
+            Labels for computing the next sequence prediction (classification) loss. Input should be a sequence pair (see :obj:`input_ids` docstring)
+            Indices should be in ``[0, 1]``:
+
+            - 0 indicates sequence B is a continuation of sequence A,
+            - 1 indicates sequence B is a random sequence.
+        kwargs (:obj:`Dict[str, any]`, optional, defaults to `{}`):
+            Used to hide legacy arguments that have been deprecated.
 
         Returns:
 
-        Examples::
+        Example::
 
             >>> from transformers import BertTokenizer, BertForPreTraining
             >>> import torch
@@ -982,7 +996,7 @@ class BertLMHeadModel(BertPreTrainedModel):
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=CausalLMOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
@@ -1000,19 +1014,21 @@ class BertLMHeadModel(BertPreTrainedModel):
         return_dict=None,
     ):
         r"""
-            encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
-                Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention
-                if the model is configured as a decoder.
-            encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-                Mask to avoid performing attention on the padding token indices of the encoder input. This mask
-                is used in the cross-attention if the model is configured as a decoder.
-                Mask values selected in ``[0, 1]``:
-                ``1`` for tokens that are NOT MASKED, ``0`` for MASKED tokens.
-            labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
-                Labels for computing the left-to-right language modeling loss (next word prediction).
-                Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
-                Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
-                in ``[0, ..., config.vocab_size]``
+        encoder_hidden_states  (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length, hidden_size)`, `optional`):
+            Sequence of hidden-states at the output of the last layer of the encoder. Used in the cross-attention
+            if the model is configured as a decoder.
+        encoder_attention_mask (:obj:`torch.FloatTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+            Mask to avoid performing attention on the padding token indices of the encoder input. This mask
+            is used in the cross-attention if the model is configured as a decoder.
+            Mask values selected in ``[0, 1]``:
+
+            - 1 for tokens that are **not masked**,
+            - 0 for tokens that are **maked**.
+        labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size, sequence_length)`, `optional`):
+            Labels for computing the left-to-right language modeling loss (next word prediction).
+            Indices should be in ``[-100, 0, ..., config.vocab_size]`` (see ``input_ids`` docstring)
+            Tokens with indices set to ``-100`` are ignored (masked), the loss is only computed for the tokens with labels
+            n ``[0, ..., config.vocab_size]``
 
         Returns:
 
@@ -1098,7 +1114,7 @@ class BertForMaskedLM(BertPreTrainedModel):
     def get_output_embeddings(self):
         return self.cls.predictions.decoder
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -1202,7 +1218,7 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
 
         self.init_weights()
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @replace_return_docstrings(output_type=NextSentencePredictorOutput, config_class=_CONFIG_FOR_DOC)
     def forward(
         self,
@@ -1218,11 +1234,12 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         return_dict=None,
     ):
         r"""
-            next_sentence_label (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
-                Labels for computing the next sequence prediction (classification) loss. Input should be a sequence pair (see ``input_ids`` docstring)
-                Indices should be in ``[0, 1]``.
-                ``0`` indicates sequence B is a continuation of sequence A,
-                ``1`` indicates sequence B is a random sequence.
+        next_sentence_label (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
+            Labels for computing the next sequence prediction (classification) loss. Input should be a sequence pair
+            (see ``input_ids`` docstring).  Indices should be in ``[0, 1]``:
+
+            - 0 indicates sequence B is a continuation of sequence A,
+            - 1 indicates sequence B is a random sequence.
 
         Returns:
 
@@ -1281,32 +1298,133 @@ class MFCCAvgEncoder(torch.nn.Module):
         super(MFCCAvgEncoder, self).__init__()
         self.projection = nn.Linear(idim, odim)
 
-    def forward(self, x):
+    def forward(self, x, x_masks):
         """
-        :param torch.Tensor x: input tensor of shape (B, text_length, frame_length, dimension)
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
         :return: torch.Tensor of shape (B, text_length, odim)
         """
-        x = torch.mean(x, 2)
+        # Must segment first
+        # shape: (B, text_length, frame_length, dimension)
+        x = x.unsqueeze(1) * x_masks.unsqueeze(-1)
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        x = torch.sum(x, 2)
+        #x = x / torch.sum(x_masks, 2, keepdim=True)
+        x = x / torch.clamp(torch.sum(x_masks, 2, keepdim=True), min=1)
+        x[torch.isnan(x)] = 0.0
+
+        # projection
         x = self.projection(x)
         return x
 
-#class MFCCTransformerEncoder(BertEncoder):
 class MFCCTransformerEncoder(torch.nn.Module):
     def __init__(self, idim, num_hidden_layers, config):
         #super().__init__(config)
         super(MFCCTransformerEncoder, self).__init__()
-        self.projection = nn.Linear(idim, config.hidden_size)
+
+        self.odim = config.hidden_size
+
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(1, self.odim, 3, stride=2, padding=1, bias=False),
+            torch.nn.Tanh(),
+            torch.nn.Conv2d(self.odim, self.odim, 3, stride=2, padding=1, bias=False),
+            torch.nn.Tanh(),
+        )
+        self.projection = torch.nn.Linear(self.odim * (idim // 4 + 1), self.odim)
+
         encoder_config = deepcopy(config)
         encoder_config.num_hidden_layers = num_hidden_layers
         self.encoder = BertEncoder(encoder_config)
-        # self.layer = nn.ModuleList([BertLayer(config) for _ in range(num_hidden_layers)])
-        self.pool = torch.nn.AdaptiveMaxPool2d((config.hidden_size, 1))
 
-    def forward(self, x):
-        x = self.projection(x)
+        self.position_embeddings = nn.Embedding(encoder_config.max_position_embeddings, encoder_config.hidden_size)
+        # position_ids (1, len position emb) is contiguous in memory and exported when serialized
+        self.register_buffer("position_ids", torch.arange(config.max_position_embeddings).expand((1, -1)))
+
+    def forward(self, x, x_masks):
+        """
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
+        :return: torch.Tensor of shape (B, text_length, odim)
+        """
+        # Conv2d subsampling
+        # Input: (b, f, d)
+        # To do conv2d, we reshape to (b, 1, f, d)
+        x = x.unsqueeze(1)
+        x = self.conv(x) # (b, c, f, d)
+        b, c, f, d = x.size()
+        x = x.transpose(1, 2).contiguous().view(b, f, c * d)
+        x = self.projection(x) # (b, f//4, d)
+
+        # Transformer block
+        seq_length = x.shape[1]
+        position_ids = self.position_ids[:, :seq_length]
+        position_embeddings = self.position_embeddings(position_ids)
+        x = x + position_embeddings
         x = self.encoder(x, return_dict=True)
-        x = self.pool(x.last_hidden_state)
-        x = x.squeeze(-1)
+        x = x.last_hidden_state # (b, f//4, odim)
+
+        # Segment using masks
+        # (B, 1, f, d) * (B, t, f, 1)
+        # output shape: (B, t, f, d)
+        new_masks = x_masks[:, :, ::4]
+        x = x.unsqueeze(1) * new_masks.unsqueeze(-1)
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        x = torch.sum(x, 2)
+        x = x / torch.clamp(torch.sum(new_masks, 2, keepdim=True), min=1)
+        #x = x / torch.sum(x_masks, 2, keepdim=True)
+        #x[torch.isnan(x)] = 0.0
+        #x[torch.isinf(x)] = 0.0
+
+        return x
+
+class MFCCStridedConv2dEncoder(torch.nn.Module):
+    def __init__(self, idim, config):
+        #super().__init__(config)
+        super(MFCCStridedConv2dEncoder, self).__init__()
+
+        self.odim = config.hidden_size
+
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(1, self.odim, 3, stride=2, padding=1, bias=False),
+            torch.nn.Tanh(),
+            torch.nn.Conv2d(self.odim, self.odim, 3, stride=2, padding=1, bias=False),
+            torch.nn.Tanh(),
+        )
+        self.projection = torch.nn.Linear(self.odim * (idim // 4 + 1), self.odim)
+
+    def forward(self, x, x_masks):
+        """
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
+        :return: torch.Tensor of shape (B, text_length, odim)
+        """
+        # Conv2d subsampling
+        # Input: (b, f, d)
+        # To do conv2d, we reshape to (b, 1, f, d)
+        x = x.unsqueeze(1)
+        x = self.conv(x) # (b, c, f, d)
+        b, c, f, d = x.size()
+        x = x.transpose(1, 2).contiguous().view(b, f, c * d)
+        x = self.projection(x) # (b, f//4, d)
+
+        # Segment using masks
+        # (B, 1, f, d) * (B, t, f, 1)
+        # output shape: (B, t, f, d)
+        new_masks = x_masks[:, :, ::4]
+        x = x.unsqueeze(1) * new_masks.unsqueeze(-1)
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        x = torch.sum(x, 2)
+        x = x / torch.clamp(torch.sum(new_masks, 2, keepdim=True), min=1)
+        #x = x / torch.sum(x_masks, 2, keepdim=True)
+        #x[torch.isnan(x)] = 0.0
+        #x[torch.isinf(x)] = 0.0
+
         return x
 
 class MFCCEncoder(torch.nn.Module):
@@ -1324,7 +1442,8 @@ class MFCCEncoder(torch.nn.Module):
             torch.nn.Tanh(),
         )
         #self.pool = torch.nn.AdaptiveMaxPool2d((odim, 1))
-        self.pool = torch.nn.AdaptiveAvgPool2d((odim, 1))
+        self.pool = torch.nn.AdaptiveAvgPool2d((c, 1))
+        self.projection = nn.Linear(c, odim)
 
     def forward(self, x):
         """
@@ -1333,19 +1452,88 @@ class MFCCEncoder(torch.nn.Module):
         """
 
         # Input: (b, t, f, d)
-        b, t, f, d = x.size()
-
         # To do conv2d, we reshape to (b * t, 1, f, d)
+        b, t, f, d = x.size()
         x = x.view(b * t, 1, f, d)
-        x = self.conv(x) # (b * t, 768, f-4, d-4)
-
+        x = self.conv(x) # (b * t, c, f-4, d-4)
         # reshape back to (b, t, ...)
-        _, odim, newf, newd = x.size()
-        x = x.view(b, t, odim, -1) # (b, t, odim, f-4 * d-4)
+        _, c, newf, newd = x.size()
+        x = x.view(b, t, c, -1) # (b, t, c, f-4 * d-4)
 
+        # Pooling and projection
         x = self.pool(x)
         x = x.squeeze(-1)
+        x = self.projection(x)
         return x
+
+class MFCCConv1dEncoder(torch.nn.Module):
+    """Encoder for MFCCs.
+    """
+
+    def __init__(self, idim, c, odim, segment="first"):
+        super(MFCCConv1dEncoder, self).__init__()
+        self.conv = torch.nn.Sequential(
+            torch.nn.Conv2d(1, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
+            torch.nn.Tanh(),
+            torch.nn.Conv2d(c, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
+            torch.nn.Tanh(),
+            #torch.nn.Conv2d(c, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
+            #torch.nn.Tanh(),
+        )
+        self.c = c
+        self.projection = nn.Linear(idim, odim)
+        self.segment = segment
+
+    def forward(self, x, x_masks):
+        """
+        :param torch.Tensor x: input tensor of shape (B, frame_length, dimension)
+        :param torch.Tensor x_masks: input tensor of shape (B, text_length, frame_length)
+        :return: torch.Tensor of shape (B, text_length, odim)
+        """
+        if self.segment == "later":
+            # Input: (b, f, d)
+            # To do conv2d, we reshape to (b, 1, f, d)
+            x = x.unsqueeze(1)
+            x = self.conv(x) # (b, c, f//4, d)
+
+            # segment later
+            # (B, 1, c, f, d) * (B, t, 1, f, 1)
+            # output shape: (B, t, c, f, d)
+            new_masks = x_masks[:, :, ::4]
+            x = x.unsqueeze(1) * new_masks.unsqueeze(2).unsqueeze(-1)
+
+        elif self.segment == "first":
+            # segment first
+            # shape: (B, text_length, frame_length, dimension)
+            x = x.unsqueeze(1) * x_masks.unsqueeze(-1)
+
+            # Input: (b, t, f, d)
+            # To do conv2d, we reshape to (b * t, 1, f, d)
+            b, t, f, d = x.size()
+            x = x.view(b * t, 1, f, d)
+            x = self.conv(x) # (b * t, c, f, d)
+            x = x.view(b, t, self.c, f, d) # (b, t, c, f, d)
+        else:
+            raise ValueError("unknown segment type")
+
+        # Masked Avg
+        # shape: (B, text_length, dimension)
+        #print(x.shape)
+        #print(x[0])
+        x = torch.mean(x, 2) # avg along channel axis first -> (B, t, f, d)
+        #print(x.shape)
+        #print(x[0])
+        x = torch.sum(x, 2)
+        #x = x / torch.clamp(torch.sum(x_masks, 2, keepdim=True), min=1)
+        x = x / torch.sum(x_masks, 2, keepdim=True)
+        x[torch.isnan(x)] = 0.0
+        x[torch.isinf(x)] = 0.0
+
+        # projection
+        x = self.projection(x)
+        return x
+
+
 
 class BertForASR(BertPreTrainedModel):
     def __init__(self, config):
@@ -1359,8 +1547,12 @@ class BertForASR(BertPreTrainedModel):
         if config.use_audio:
             if config.acoustic_encoder_type == "conv":
                 self.encoder = MFCCEncoder(128, config.hidden_size)
+            if config.acoustic_encoder_type == "conv1d":
+                self.encoder = MFCCConv1dEncoder(83, 128, config.hidden_size, config.acoustic_encoder_segment)
+            elif config.acoustic_encoder_type == "stridedconv2d":
+                self.encoder = MFCCStridedConv2dEncoder(83, config)
             elif config.acoustic_encoder_type == "transformer":
-                self.encoder = MFCCTransformerEncoder(83, 1, config)
+                self.encoder = MFCCTransformerEncoder(83, config.acoustic_encoder_layers, config)
             elif config.acoustic_encoder_type == "avg":
                 self.encoder = MFCCAvgEncoder(83, config.hidden_size)
             else:
@@ -1378,6 +1570,7 @@ class BertForASR(BertPreTrainedModel):
         head_mask=None,
         inputs_embeds=None,
         inputs_mfccs=None,
+        inputs_mfccs_masks=None,
         labels=None,
         output_attentions=None,
         output_hidden_states=None,
@@ -1394,16 +1587,17 @@ class BertForASR(BertPreTrainedModel):
 
         #print("Inputs mfccs shape", inputs_mfccs.shape)
         if self.config.use_audio:
-            if self.config.acoustic_encoder_type == "conv":
-                acoustic_embeddings = self.encoder(inputs_mfccs)
+            if self.config.acoustic_encoder_type in ["conv", "conv1d", "stridedconv2d"]:
+                acoustic_embeddings = self.encoder(inputs_mfccs, inputs_mfccs_masks)
             elif self.config.acoustic_encoder_type == "transformer":
                 # The BertEncoder in HFT does not accept 4-dim input, 
                 # So we do this sentence by sentence
-                acoustic_embeddings = torch.stack(
-                    [self.encoder(mfccs) for mfccs in torch.unbind(inputs_mfccs)]
-                )
+                #acoustic_embeddings = torch.stack(
+                #    [self.encoder(mfccs) for mfccs in torch.unbind(inputs_mfccs)]
+                #)
+                acoustic_embeddings = self.encoder(inputs_mfccs, inputs_mfccs_masks)
             elif self.config.acoustic_encoder_type == "avg":
-                acoustic_embeddings = self.encoder(inputs_mfccs)
+                acoustic_embeddings = self.encoder(inputs_mfccs, inputs_mfccs_masks)
             else:
                 raise ValueError("unknown acoustic_encoder_type")
 
@@ -1475,7 +1669,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         self.init_weights()
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -1558,7 +1752,7 @@ class BertForMultipleChoice(BertPreTrainedModel):
 
         self.init_weights()
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, num_choices, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, num_choices, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -1581,8 +1775,8 @@ class BertForMultipleChoice(BertPreTrainedModel):
         r"""
         labels (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
             Labels for computing the multiple choice classification loss.
-            Indices should be in ``[0, ..., num_choices-1]`` where `num_choices` is the size of the second dimension
-            of the input tensors. (see `input_ids` above)
+            Indices should be in ``[0, ..., num_choices-1]`` where :obj:`num_choices` is the size of the second dimension
+            of the input tensors. (See :obj:`input_ids` above)
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
         num_choices = input_ids.shape[1] if input_ids is not None else inputs_embeds.shape[1]
@@ -1648,7 +1842,7 @@ class BertForTokenClassification(BertPreTrainedModel):
 
         self.init_weights()
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -1733,7 +1927,7 @@ class BertForQuestionAnswering(BertPreTrainedModel):
 
         self.init_weights()
 
-    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("(batch_size, sequence_length)"))
+    @add_start_docstrings_to_callable(BERT_INPUTS_DOCSTRING.format("batch_size, sequence_length"))
     @add_code_sample_docstrings(
         tokenizer_class=_TOKENIZER_FOR_DOC,
         checkpoint="bert-base-uncased",
@@ -1757,11 +1951,11 @@ class BertForQuestionAnswering(BertPreTrainedModel):
         r"""
         start_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
             Labels for position (index) of the start of the labelled span for computing the token classification loss.
-            Positions are clamped to the length of the sequence (`sequence_length`).
+            Positions are clamped to the length of the sequence (:obj:`sequence_length`).
             Position outside of the sequence are not taken into account for computing the loss.
         end_positions (:obj:`torch.LongTensor` of shape :obj:`(batch_size,)`, `optional`):
             Labels for position (index) of the end of the labelled span for computing the token classification loss.
-            Positions are clamped to the length of the sequence (`sequence_length`).
+            Positions are clamped to the length of the sequence (:obj:`sequence_length`).
             Position outside of the sequence are not taken into account for computing the loss.
         """
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict

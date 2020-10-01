@@ -131,9 +131,9 @@ def _asr_convert_examples_to_features(
     start = time.time()
     batch_encoding = tokenizer(
         [example.text for example in examples],
-        max_length=max_length,
-        padding="max_length",
-        truncation=True,
+        #max_length=max_length,
+        #padding="max_length",
+        #truncation=True,
     )
     print("Tokenization took {:.1f} s".format(time.time() - start))
 
@@ -154,14 +154,14 @@ def _asr_convert_examples_to_features(
 class ASRProcessor(DataProcessor):
     """Processor for an ASR data set."""
 
-    def _read_scp(self, file_path, debug, debug_lines=100):
+    def _read_scp(self, file_path, debug, debug_lines=1000):
         with open(file_path, encoding="utf-8") as f:
             if debug:
                 return [line for line in f.read().splitlines()[:debug_lines] if (len(line) > 0 and not line.isspace())]
             else:
                 return [line for line in f.read().splitlines() if (len(line) > 0 and not line.isspace())]
 
-    def _read_mfcc_loader_from_scp(self, scp, mfcc_dir, debug, debug_lines=100):
+    def _read_mfcc_loader_from_scp(self, scp, mfcc_dir, debug, debug_lines=1000):
         """Return a dict: {fileid: processed_mfcc}"""
         if debug:
             fileids = [line.split(" ")[0] for line in scp][:debug_lines]
