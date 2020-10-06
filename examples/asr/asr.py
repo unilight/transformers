@@ -79,6 +79,9 @@ class ModelArguments:
     acoustic_encoder_layers: Optional[int] = field(
         default=1, metadata={"help": "Acoustic encoder number of layers"}
     )
+    acoustic_encoder_projection_type: Optional[str] = field(
+        default="linear", metadata={"help": "Acoustic encoder projection type"}
+    )
 
 
 @dataclass
@@ -156,6 +159,7 @@ def main():
     config.acoustic_encoder_type = model_args.acoustic_encoder_type
     config.acoustic_encoder_segment = model_args.acoustic_encoder_segment
     config.acoustic_encoder_layers = model_args.acoustic_encoder_layers
+    config.acoustic_encoder_projection_type = model_args.acoustic_encoder_projection_type
 
     if model_args.tokenizer_name:
         tokenizer = AutoTokenizer.from_pretrained(model_args.tokenizer_name, cache_dir=model_args.cache_dir)

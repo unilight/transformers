@@ -1294,9 +1294,29 @@ class BertForNextSentencePrediction(BertPreTrainedModel):
         )
 
 class MFCCAvgEncoder(torch.nn.Module):
-    def __init__(self, idim, odim):
+    def __init__(self, idim, odim, projection_type="linear"):
         super(MFCCAvgEncoder, self).__init__()
-        self.projection = nn.Linear(idim, odim)
+        self.projection_type = projection_type
+        if projection_type == "linear":
+            self.projection = nn.Linear(idim, odim)
+        elif projection_type == "ffn":
+            self.projection = torch.nn.Sequential(
+                nn.Linear(idim, odim*4),
+                torch.nn.ReLU(),
+                nn.Linear(odim*4, odim*4),
+                torch.nn.ReLU(),
+                nn.Linear(odim*4, odim),
+            )
+        elif projection_type == "res_ffn":
+            self.projection = torch.nn.Sequential(
+                nn.Linear(idim, odim*4),
+                torch.nn.ReLU(),
+                nn.Linear(odim*4, idim),
+            )
+            self.projection2 = nn.Linear(idim, odim)
+        else:
+            raise ValueError("Unknown projection type")
+
 
     def forward(self, x, x_masks):
         """
@@ -1316,7 +1336,10 @@ class MFCCAvgEncoder(torch.nn.Module):
         x[torch.isnan(x)] = 0.0
 
         # projection
-        x = self.projection(x)
+        if "res" in self.projection_type:
+            x = self.projection2(x + self.projection(x))
+        else:
+            x = self.projection(x)
         return x
 
 class MFCCTransformerEncoder(torch.nn.Module):
@@ -1466,23 +1489,103 @@ class MFCCEncoder(torch.nn.Module):
         x = self.projection(x)
         return x
 
+def conv1x1(in_planes, out_planes, stride=1):
+    """1x1 convolution"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+def conv3x1(in_planes, out_planes, stride=1):
+    """3x3 convolution with padding"""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=(3, 1), stride=(stride, 1),
+                     padding=(1, 0), bias=False)
+
+class BasicBlock(nn.Module):
+    expansion = 1
+
+    def __init__(self, inplanes, planes, stride=1, downsample=None):
+        super(BasicBlock, self).__init__()
+        #norm_layer = nn.LayerNorm
+        norm_layer = nn.BatchNorm2d
+        # Both self.conv1 and self.downsample layers downsample the input when stride != 1
+        self.conv1 = conv3x1(inplanes, planes, stride)
+        #self.norm1 = norm_layer(83)
+        self.norm1 = norm_layer(planes)
+        self.relu = nn.ReLU()
+        #self.conv2 = conv3x1(planes, planes)
+        self.conv2 = conv3x1(planes, inplanes)
+        #self.norm2 = norm_layer(83)
+        self.norm2 = norm_layer(planes)
+        self.downsample = downsample
+        self.stride = stride
+
+    def forward(self, x):
+        identity = x
+
+        out = self.conv1(x)
+        #out = self.norm1(out)
+        out = self.relu(out)
+        #out = gelu(out)
+
+        out = self.conv2(out)
+        #out = self.norm2(out)
+        out = self.relu(out)
+        #out = gelu(out)
+
+        if self.downsample is not None:
+            identity = self.downsample(x)
+
+        out += identity
+        #out = self.relu(out)
+        #out = gelu(out)
+        #out = mish(out)
+        #out = mish(out)
+
+        return out
+
 class MFCCConv1dEncoder(torch.nn.Module):
     """Encoder for MFCCs.
     """
 
-    def __init__(self, idim, c, odim, segment="first"):
+    channels = [1, 8, 16, 32, 64, 128, 256]
+    #channels = [1, 1, 1, 1, 1, 1]
+    inplanes = 1 # this will be dynamically changed (like a local variable)
+
+    def __init__(self, idim, c, odim, num_blocks, segment="first"):
         super(MFCCConv1dEncoder, self).__init__()
-        self.conv = torch.nn.Sequential(
-            torch.nn.Conv2d(1, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
-            torch.nn.Tanh(),
-            torch.nn.Conv2d(c, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
-            torch.nn.Tanh(),
-            #torch.nn.Conv2d(c, c, (3, 1), (2, 1), padding=(1, 0), bias=False),
-            #torch.nn.Tanh(),
+        self.num_blocks = num_blocks
+        self.res_first = conv1x1(self.inplanes, self.channels[1])
+        #self.inplanes = self.channels[1]
+        self.resnet = nn.ModuleList(
+            [self._make_layer(BasicBlock, self.channels[i+1], 2) for i in range(self.num_blocks)]
         )
+        self.res_last = conv1x1(self.channels[self.num_blocks], 1)
         self.c = c
         self.projection = nn.Linear(idim, odim)
         self.segment = segment
+        
+        for m in self.modules():
+            if isinstance(m, (nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm)):
+                nn.init.constant_(m.weight, 1)
+                nn.init.constant_(m.bias, 0)
+
+        # Zero-initialize the last BN in each residual branch,
+        # so that the residual branch starts with zeros, and each residual block behaves like an identity.
+        # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
+        #    if isinstance(m, BasicBlock):
+        #        nn.init.constant_(m.ln2.weight, 0)
+    
+    def _make_layer(self, block, planes, blocks, stride=1):
+        downsample = None
+        #if stride != 1 or self.inplanes != planes * block.expansion:
+        #if stride != 1:
+        #    downsample = conv1x1(self.inplanes, planes * block.expansion, stride),
+
+        layers = []
+        layers.append(block(self.inplanes, planes, stride, downsample))
+        #self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
 
     def forward(self, x, x_masks):
         """
@@ -1494,13 +1597,20 @@ class MFCCConv1dEncoder(torch.nn.Module):
             # Input: (b, f, d)
             # To do conv2d, we reshape to (b, 1, f, d)
             x = x.unsqueeze(1)
-            x = self.conv(x) # (b, c, f//4, d)
+
+            # resnet
+            #x = self.res_first(x)
+            for i in range(self.num_blocks):
+                x = self.resnet[i](x)
+            #x = self.res_last(x)
+            x = x.squeeze(1) # avg along channel axis first -> (B, f//4, d)
 
             # segment later
-            # (B, 1, c, f, d) * (B, t, 1, f, 1)
-            # output shape: (B, t, c, f, d)
-            new_masks = x_masks[:, :, ::4]
-            x = x.unsqueeze(1) * new_masks.unsqueeze(2).unsqueeze(-1)
+            # (B, 1, f, d) * (B, t, f, 1)
+            # output shape: (B, t, f, d)
+            #new_masks = x_masks[:, :, ::4]
+            #x = x.unsqueeze(1) * new_masks.unsqueeze(-1)
+            x = x.unsqueeze(1) * x_masks.unsqueeze(-1)
 
         elif self.segment == "first":
             # segment first
@@ -1512,17 +1622,13 @@ class MFCCConv1dEncoder(torch.nn.Module):
             b, t, f, d = x.size()
             x = x.view(b * t, 1, f, d)
             x = self.conv(x) # (b * t, c, f, d)
-            x = x.view(b, t, self.c, f, d) # (b, t, c, f, d)
+            x = torch.mean(x, 1) # avg along channel axis first -> (b * t, f//4, d)
+            x = x.view(b, t, -1, d) # (b, t, c, f, d)
         else:
             raise ValueError("unknown segment type")
 
         # Masked Avg
         # shape: (B, text_length, dimension)
-        #print(x.shape)
-        #print(x[0])
-        x = torch.mean(x, 2) # avg along channel axis first -> (B, t, f, d)
-        #print(x.shape)
-        #print(x[0])
         x = torch.sum(x, 2)
         #x = x / torch.clamp(torch.sum(x_masks, 2, keepdim=True), min=1)
         x = x / torch.sum(x_masks, 2, keepdim=True)
@@ -1548,13 +1654,13 @@ class BertForASR(BertPreTrainedModel):
             if config.acoustic_encoder_type == "conv":
                 self.encoder = MFCCEncoder(128, config.hidden_size)
             if config.acoustic_encoder_type == "conv1d":
-                self.encoder = MFCCConv1dEncoder(83, 128, config.hidden_size, config.acoustic_encoder_segment)
+                self.encoder = MFCCConv1dEncoder(83, 8, config.hidden_size, config.acoustic_encoder_layers, config.acoustic_encoder_segment)
             elif config.acoustic_encoder_type == "stridedconv2d":
                 self.encoder = MFCCStridedConv2dEncoder(83, config)
             elif config.acoustic_encoder_type == "transformer":
                 self.encoder = MFCCTransformerEncoder(83, config.acoustic_encoder_layers, config)
             elif config.acoustic_encoder_type == "avg":
-                self.encoder = MFCCAvgEncoder(83, config.hidden_size)
+                self.encoder = MFCCAvgEncoder(83, config.hidden_size, config.acoustic_encoder_projection_type)
             else:
                 raise ValueError("Unknown acoustic encoder type.")
         self.classifier = nn.Linear(classifier_idim, config.num_labels)

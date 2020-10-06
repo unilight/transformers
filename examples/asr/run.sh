@@ -8,9 +8,9 @@ pip install -e ../../ || exit 1;
 # general
 stage=-1
 stop_stage=100
-save_steps=50000
+save_steps=100000
 logging_steps=1000
-n_jobs=5      # number of parallel jobs in feature extraction
+n_jobs=7      # number of parallel jobs in feature extraction
 debug=no
 
 # data related
@@ -26,6 +26,7 @@ max_seq_length=46
 bs=1
 accum_grad=8
 lr=5e-5
+num_train_epochs=9.0
 freeze_mods=
 use_audio=
 exhaustion=
@@ -33,6 +34,7 @@ fusion_place="first"
 acoustic_encoder_type="conv"
 acoustic_encoder_segment="first"
 acoustic_encoder_layers=1
+acoustic_encoder_projection_type="linear"
 
 # model related
 model_type=bert
@@ -45,6 +47,7 @@ beam_size=10
 set_type="dev"
 lm_weight=0.0
 lm_model_path=rnnlm/init.bin
+espnet_dir=/home/huang18/VC/Experiments
 
 # exp tag
 tag="default"  # tag for managing experiments.
@@ -113,6 +116,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
     expdir=exp/${tag}
 
     python asr.py \
+        --acoustic_encoder_projection_type=${acoustic_encoder_projection_type} \
         --acoustic_encoder_layers=${acoustic_encoder_layers} \
         --acoustic_encoder_segment=${acoustic_encoder_segment} \
         --acoustic_encoder_type=${acoustic_encoder_type} \
@@ -125,6 +129,7 @@ if [ ${stage} -le 4 ] && [ ${stop_stage} -ge 4 ]; then
         --per_device_train_batch_size=${bs} \
         --learning_rate=${lr} \
         --gradient_accumulation_steps=${accum_grad} \
+        --num_train_epochs=${num_train_epochs} \
         --freeze_mods=${freeze_mods} \
         --debugging=${debug} \
         --output_dir=${expdir} --overwrite_output_dir \
@@ -147,6 +152,7 @@ if [ ${stage} -le 5 ] && [ ${stop_stage} -ge 5 ]; then
     cp exp/text-only-exhaustive/vocab.txt ${expdir}
 
     python decode.py \
+        --acoustic_encoder_projection_type=${acoustic_encoder_projection_type} \
         --acoustic_encoder_layers=${acoustic_encoder_layers} \
         --acoustic_encoder_type=${acoustic_encoder_type} \
         --fusion_place=${fusion_place} \
@@ -186,6 +192,8 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     echo $(date) "Decoding..."
     ${train_cmd} JOB=1:${n_jobs} "${expdir}/${set_type}/log/${log_name}.JOB.log" \
         python decode.py \
+            --acoustic_encoder_projection_type=${acoustic_encoder_projection_type} \
+            --acoustic_encoder_layers=${acoustic_encoder_layers} \
             --acoustic_encoder_segment=${acoustic_encoder_segment} \
             --acoustic_encoder_type=${acoustic_encoder_type} \
             --fusion_place=${fusion_place} \
@@ -209,7 +217,7 @@ if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
         done
     fi
 
-    echo "Decoding finished."
+    echo $(date) "Decoding finished."
 fi
 
 
@@ -229,7 +237,7 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
         --refs ${expdir}/${set_type}/ref.trn \
         --hyps ${expdir}/${set_type}/hyp.trn
 
-    /home/huang18/VC/Experiments/espnet/tools/kaldi/tools/sctk-2.4.10/bin/sclite \
+    ${espnet_dir}/espnet/tools/kaldi/tools/sctk-2.4.10/bin/sclite \
         -r ${expdir}/${set_type}/ref.trn trn \
         -h ${expdir}/${set_type}/hyp.trn \
         -i rm -o all stdout > ${expdir}/${set_type}/result.txt

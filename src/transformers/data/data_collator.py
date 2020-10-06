@@ -75,14 +75,14 @@ def fast_pad_sequence(sequences, axis, max_length=None, batch_first=True):
     :param List(torch.Tensor) x: input tensor of shape (B, text_length, frame_length, dimension)
     :return: torch.Tensor of shape (B, text_length, odim)
     """
-    max_length = self.max_text_length if self.max_text_length else max([seq.shape[axis] for seq in sequences])
+    max_length = max_length if max_length else max([seq.shape[axis] for seq in sequences])
     num_axes = len(sequences[0].shape)
     return_list = []
     for seq in sequences:
         pad_tuple = [0] * num_axes * 2
-        pad_tuple[axis*2+1] = max_length - seq.shape[axis]
+        pad_tuple[(num_axes - axis - 1)*2+1] = max_length - seq.shape[axis]
         return_list.append(pad(seq, pad_tuple))
-    return return_list
+    return torch.stack(return_list)
 
 @dataclass
 class DataCollatorForASR:
@@ -132,9 +132,13 @@ class DataCollatorForASR:
         #batch["input_ids"] = torch.tensor(processed_input_ids)
         #batch["attention_mask"] = torch.tensor(processed_attention_mask)
         """ Padding """
-        batch["input_ids"] = pad_sequence(processed_input_ids, batch_first=True)
-        batch["attention_mask"] = pad_sequence(processed_attention_mask, batch_first=True)
-        batch["token_type_ids"] = pad_sequence(processed_token_type_ids, batch_first=True)
+        #batch["input_ids"] = fast_pad_sequence(processed_input_ids, 0, batch_first=True)
+        #batch["attention_mask"] = fast_pad_sequence(processed_attention_mask, 0, batch_first=True)
+        #batch["token_type_ids"] = fast_pad_sequence(processed_token_type_ids, 0, batch_first=True)
+        #print(fast_pad_sequence(processed_input_ids, 0, batch_first=True))
+        batch["input_ids"] = fast_pad_sequence(processed_input_ids, 0, batch_first=True)
+        batch["attention_mask"] = fast_pad_sequence(processed_attention_mask, 0, batch_first=True)
+        batch["token_type_ids"] = fast_pad_sequence(processed_token_type_ids, 0, batch_first=True)
 
         # token_type_ids doesn't need processing
         #batch["token_type_ids"] = pad_sequence([torch.tensor(f["token_type_ids"][:-2]) for f in features], batch_first=True)
@@ -161,7 +165,7 @@ class DataCollatorForASR:
             #frame_padded_mfccs = [pad(mfcc, (0, 0, 0, max_frame_length - mfcc.shape[1], 0, 0)) for mfcc in tensor_mfccs]
             #text_padded_mfccs = [pad(mfcc, (0, 0, 0, 0, 0, max_text_length - mfcc.shape[0])) for mfcc in frame_padded_mfccs]
             #all_mfccs = torch.stack(text_padded_mfccs)
-            all_mfccs = pad_sequence(tensor_mfccs_list, batch_first=True)
+            all_mfccs = fast_pad_sequence(tensor_mfccs_list, 0, batch_first=True)
             batch["inputs_mfccs"] = all_mfccs
 
             """ Mask shape: [B, max_text_length, max_frame_length] """
@@ -176,7 +180,7 @@ class DataCollatorForASR:
             frame_padded_masks = [pad(_masks, (0, max_frame_length - _masks.shape[1], 0, 0)) for _masks in tensor_masks_list]
             #text_padded_masks = [pad(_masks, (0, 0, 0, max_text_length - _masks.shape[0])) for _masks in frame_padded_masks]
             #all_masks = torch.stack(text_padded_masks)
-            all_masks = pad_sequence(frame_padded_masks, batch_first=True)
+            all_masks = fast_pad_sequence(frame_padded_masks, 0, batch_first=True)
             batch["inputs_mfccs_masks"] = all_masks
 
             #print(batch["inputs_mfccs"].shape)
