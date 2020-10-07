@@ -1513,7 +1513,7 @@ class BasicBlock(nn.Module):
         #self.conv2 = conv3x1(planes, planes)
         self.conv2 = conv3x1(planes, inplanes)
         #self.norm2 = norm_layer(83)
-        self.norm2 = norm_layer(planes)
+        self.norm2 = norm_layer(inplanes)
         self.downsample = downsample
         self.stride = stride
 
@@ -1559,9 +1559,9 @@ class MFCCConv1dEncoder(torch.nn.Module):
         )
         self.res_last = conv1x1(self.channels[self.num_blocks], 1)
         self.c = c
-        self.projection = nn.Linear(idim, odim)
+        self.projection = nn.Linear(idim, odim, bias=False)
         self.segment = segment
-        
+
         for m in self.modules():
             if isinstance(m, (nn.BatchNorm2d, nn.LayerNorm, nn.GroupNorm)):
                 nn.init.constant_(m.weight, 1)
@@ -1572,7 +1572,7 @@ class MFCCConv1dEncoder(torch.nn.Module):
         # This improves the model by 0.2~0.3% according to https://arxiv.org/abs/1706.02677
         #    if isinstance(m, BasicBlock):
         #        nn.init.constant_(m.ln2.weight, 0)
-    
+
     def _make_layer(self, block, planes, blocks, stride=1):
         downsample = None
         #if stride != 1 or self.inplanes != planes * block.expansion:

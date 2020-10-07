@@ -48,6 +48,7 @@ set_type="dev"
 lm_weight=0.0
 lm_model_path=rnnlm/init.bin
 espnet_dir=/home/huang18/VC/Experiments
+n_average=5
 
 # exp tag
 tag="default"  # tag for managing experiments.
@@ -170,11 +171,23 @@ fi
 
 if [ ${stage} -le 6 ] && [ ${stop_stage} -ge 6 ]; then
     echo "stage 6: Multiprocess ASR decoding"
-
     if [ -z ${model_dir} ]; then
         expdir=exp/${tag}
     else
         expdir=${model_dir}
+    fi
+
+    if [ ${n_average} -gt 0 ]; then
+        newexpdir=$(dirname ${expdir})/last${n_average}_$(basename ${expdir})
+        if [[ ! -e ${newexpdir} ]]; then
+            cp -r ${expdir} ${newexpdir}
+            rm -f ${newexpdir}/pytorch_model.bin
+        fi
+        local/average_checkpoints.py \
+            --snapshots $(dirname ${expdir})/checkpoint-*/pytorch_model.bin \
+           --out ${newexpdir}/pytorch_model.bin \
+           --num ${n_average}
+        expdir=${newexpdir}
     fi
 
     cp exp/text-only-exhaustive/vocab.txt ${expdir}
