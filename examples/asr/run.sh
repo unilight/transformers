@@ -245,6 +245,7 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
 
     cat ${expdir}/${set_type}/asr_results.*.txt > ${expdir}/${set_type}/asr_results.txt
 
+    # Normal CER
     python local/result2trn.py \
         --result_file ${expdir}/${set_type}/asr_results.txt \
         --refs ${expdir}/${set_type}/ref.trn \
@@ -255,6 +256,21 @@ if [ ${stage} -le 7 ] && [ ${stop_stage} -ge 7 ]; then
         -h ${expdir}/${set_type}/hyp.trn \
         -i rm -o all stdout > ${expdir}/${set_type}/result.txt
 
+    echo "Normal CER"
     grep -e Avg -e SPKR -m 2 ${expdir}/${set_type}/result.txt
+
+    # SER
+    python local/result2syl.py \
+        --result_file ${expdir}/${set_type}/asr_results.txt \
+        --refs ${expdir}/${set_type}/ref_syl.trn \
+        --hyps ${expdir}/${set_type}/hyp_syl.trn
+
+    ${espnet_dir}/espnet/tools/kaldi/tools/sctk-2.4.10/bin/sclite \
+        -r ${expdir}/${set_type}/ref_syl.trn trn \
+        -h ${expdir}/${set_type}/hyp_syl.trn \
+        -i rm -o all stdout > ${expdir}/${set_type}/result_syl.txt
+
+    echo "SER"
+    grep -e Avg -e SPKR -m 2 ${expdir}/${set_type}/result_syl.txt
 
 fi
